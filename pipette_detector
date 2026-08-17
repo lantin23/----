@@ -1,0 +1,96 @@
+"""
+检测模式：
+1. circle:基于霍夫圆变换检测移液枪头圆形尾部
+2. contour:基于轮廓检测移液枪头细长枪身
+整齐度判断策略：
+1. 枪头数量
+2. 枪头圆心到最近中心槽的距离不超过容差
+（3.）所有枪头方向一致
+"""
+
+import cv2
+import numpy as np
+from statistics import median
+from dataclasses import dataclass, field
+from typing import List, Optional, Tuple
+
+Point = Tuple[float, float]
+
+@dataclass
+class DetectionResult:
+    """
+    检测结果数据类
+    """
+    center: List[Point] = field(default_factory=list)
+    angles: List[float] = field(defult_factory=List)
+    radii: List[float] = field(default_factory=list)
+    is_neat: bool = False
+    reason: List[str] = field(default_factory=list)
+    rows: List[List[Point]] = field(default_factory=list)
+    cols: List[List[Point]] = field(defult_factory=list)
+    #每个点到最近槽线的偏差（单位：像素）
+    slot_deviation: List[float] = field(default_factory=list)
+    #散落枪头检测结果
+    fallen_tips:List[Tuple[float, float, float, float]] = field(defult_factory=list) # (cx, cy, w, h)
+
+    @property
+    def reason_text(self) -> str:
+        if self.is_neat:
+            return "整齐"
+        return ";".join(self.reason) if self.reason else "未知原因"
+
+    class PipetteDetector:
+        """移液枪头整齐度检测器"""
+
+        def __init__(self):
+            #参数
+            self._min_tips: int = 4
+            self._slot_aligment_tol: float = 12.0 #槽中心线对齐容差
+            self._outlier_ratio_thresh: float = 0.15 #异常枪头对比阈值
+            self._min_tips_per_slot: int = 2 #有效槽至少两个枪头
+            self._check_uniform_spacing: bool = False
+            self._space_ratio: float = 0.18
+            self._min_space: float = 15.0
+
+            #槽方向 "auto" | "horizontal" | "vertical"
+            self._slot_direction: str = "auto"
+
+            #检测模式
+            self._detection_mode: str = "circle"
+
+            #轮廓检测参数
+            self._min_area: float = 80.0
+            self._max_area: float = 5000.0
+            self._angle_thresh: float = 6.0
+            self._gaussian_kernel: int = 7
+            self._canny_thresh1: int = 30
+            self._min_ciecularity: float = 0.15
+            self._min_rectangularity: float = 0.3
+
+            #霍夫圆检测参数
+            self._hough_dp: float = 1.0
+            self._hough_min_dist: float = 25.0
+            self._hough_param1: float = 80.0
+            self._hough_param2: float = 20.0
+            self._hough_min_radius: int = 10
+            self._hough_max_radius: int = 40
+            self._circle_merge_ratio: float = 0.5
+            self._circle_min_radius: float = 8.0 
+            self._circle_max_radius: float = 45.0
+            self._intensity_diff_thresh: float = 15.0  #外圈-内圈最小灰度差
+
+            #聚类容差
+            self._cluster_tol: float = 20.0
+
+            #散落枪头检测参数（细长）
+            self._fallen_tip_min_aspect: float = 1.6       #细长比例阈值
+            self._fallen_tip_max_aspect: float = 4.5       #最大细长比（过滤槽）
+            self._fallen_tip_min_area: float = 300.0       #最小面积
+            self._fallen_tip_max_area: float = 2000.0      #最大面积
+            self._fallen_tip_min_fill: float = 0.2         #最小填充率
+            self._fallen_tip_min_std: float = 25.0         #最小亮度标准
+            self._fallen_tip_max_dist_from_array: float = 250.0 #最大距离(机架过滤)
+            self._fallen_tip_max_count: int = 0            #最大散落枪头数量(不容忍)
+            
+
+            
