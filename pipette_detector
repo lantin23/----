@@ -91,6 +91,134 @@ class DetectionResult:
             self._fallen_tip_min_std: float = 25.0         #最小亮度标准
             self._fallen_tip_max_dist_from_array: float = 250.0 #最大距离(机架过滤)
             self._fallen_tip_max_count: int = 0            #最大散落枪头数量(不容忍)
-            
+            #完整枪头
+            self._full_tip_min_area: float = 5000.0        #轮廓面积阈值
+            self._full_tip_target_area: float = 9000.0     #完整枪头面积
+            self._full_tip_max_dim: float = 260.0          #最大维度上线（排除槽、隔板）
+            self._full_tip_min_dim: float = 160.0          #最小维度下线
+            self._full_tip_min_aspect: float = 3.0         #完整枪头最小细长比
+            self._full_tip_max_aspect: float = 5.0         #完整枪头最大细长比
+            #斜挎槽上枪头改用霍夫线检测两条平行边
+            self._diag_tip_min_len: float = 100.0              #线段最小长度
+            self._diag_tip_min_angle: float = 25.0         #偏离槽方向的最小夹角
+            self._diag_tip_max_angle: float = 75.0         #偏离槽方向的最大夹角
+            self._diag_tip_cluster_dist: float = 50.0      #同一枪头两条边的中心类聚距离
 
-            
+            #检测结果
+            self._result = DetectionResult()
+
+            #参数getter/setter
+            @property
+            def detection_mode(self) -> str:
+                return self._detection_mode
+
+            @detection_mode.setter
+            def detection_mode(self, value: str):
+                if value not in("circle", "contour"):
+                    raise ValueError("检测模式必须是'circle' 或 'contour'")
+                self._detection_mode = value
+
+            @property
+            def slot_direction(self) -> str:
+                return self._slot_dirction
+
+            @slot_direction.setter
+            def slot_direction(self, value: str):
+                if value not in("auto", "horizontal", "vertical"):
+                    raise ValueError("槽方向必须是'auto' | 'horizontal' | 'vertical'")
+                self._slot_direction = value
+
+            @property
+            def min_area(self) -> float:
+                return self._min_area
+
+            @min_area.setter
+            def min_area(self, value:float):
+                if value <= 0:
+                    raise ValueError(f"最小面积必须大于0")
+                if value >= self._max_area:
+                    raise ValueError(f"最小面积({value})不能大于等于最大面积({self._max_area})")
+                self._min_area = value
+
+            @property
+            def max_area(self) -> float:
+                return self._max_area
+
+            @max_area.setter
+            def max_area(self, value: float):
+                if value <= 0:
+                    raise ValueError("最大面积必须大于0")
+                if value <= self._min_area:
+                    raise ValueError(f"最大面积({value})不能小于等于最小面积({self._min_area})")
+                self._max_area = value
+
+            @property
+            def angle_threshold(self) -> float:
+                return self._angle_thresh
+
+            @angle_threshold.setter
+            def angle_threshold(self, value: float):
+                if value <= 0:
+                    raise ValueError("角度阈值必须大于0")
+                self._angle_thresh = value
+
+            @property
+            def space_ratio(self) -> float:
+                return self._space_ratio
+
+            @space_ratio.setter
+            def space_ratio(self, value: float):
+                if not (0 < value < 1):
+                    raise ValueError("间距偏差比例必须在(0, 1)范围内")
+                self._space_ratio = value
+
+            @property
+            def min_tips(self) -> int:
+                return self._min_tips
+
+            @min_tips.setter
+            def min_tips(self, value: int):
+                if value <= 0:
+                    raise ValueError("最少枪头数量必须大于0")
+                self._min_tips = value
+
+            @property
+            def slot_alignment_tolerance(self) -> float:
+                return self._slot_alignment_tol
+
+            @slot_alignment_tolerance.setter
+            def slot_alignment_tolerance(self, value: float):
+                if value <= 0:
+                   raise ValueError("槽对齐容差必须大于 0")
+                self._slot_alignment_tol = value
+
+            @property
+            def outlier_ratio_threshold(self) -> float:
+                return self._outlier_ratio_thresh
+
+            @outlier_ratio_threshold.setter
+            def outlier_ratio_threshold(self, value: float):
+                if not (0 < value <= 1):
+                    raise ValueError("异常比例阈值必须在 (0, 1] 范围内")
+                self._outlier_ratio_thresh = value
+
+            @property
+            def min_tips_per_slot(self) -> int:
+                return self._min_tips_per_slot
+
+            @min_tips_per_slot.setter
+            def min_tips_per_slot(self, value: int):
+                if value < 1:
+                    raise ValueError("每槽最少枪头数必须大于等于 1")
+                self._min_tips_per_slot = value
+
+            @property
+            def check_uniform_spacing(self) -> bool:
+                return self._check_uniform_spacing
+
+            @check_uniform_spacing.setter
+            def check_uniform_spacing(self, value: bool):
+                self._check_uniform_spacing = bool(value)
+
+
+
