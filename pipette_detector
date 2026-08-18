@@ -220,5 +220,152 @@ class DetectionResult:
             def check_uniform_spacing(self, value: bool):
                 self._check_uniform_spacing = bool(value)
 
+            #圆形检测参数
+
+            @property
+            def hough_min_dist(self) -> float:
+                return self._hough_min_dist
+
+            @hough_min_dist.setter
+            def hough_min_dist(self, value: float):
+                if value <= 0:
+                    raise ValueError("圆心最小距离必须大于0")
+                self._hough_min_dist = value
+
+            @property
+            def hough_param1(self) -> float:
+                return self._hough_param1
+
+            @hough_param1.setter
+            def hough_param1(self, value: float):
+                if value <= 0:
+                    raise ValueError("param1 必须大于0")
+
+            @property
+            def hough_param2(self) -> float:
+                return self._hough_param2
+
+            @hough_param2.setter
+            def hough_param2(self, value: float):
+                if value <= 0:
+                    raise ValueError("param2 必须大于0")
+                self._hough_param2 = value
+
+            @property
+            def hough_min_radius(self) -> int:
+                return self._hough_min_radius
+
+            @hough_min_radius.setter
+            def hough_min_radius(self, value: int):
+                if value <= 0:
+                   raise ValueError("最小半径必须大于0")
+                if value >= self._hough_max_radius:
+                    raise ValueError(f"最小半径({value})不能大于等于最大半径({self._hough_max_radius})")
+                self._hough_min_radius = value
+
+            @property 
+            def hough_max_radius(self) -> int:
+                return self._hough_max_radius
+
+            @hough_max_radius.setter
+            def hough_max_radius(self, value: int):
+                if value <= 0:
+                    raise ValueError("最大半径必须大于 0")
+                if value <= self._hough_min_radius:
+                    raise ValueError(f"最大半径({value})不能小于等于最小半径({self._hough_min_radius})")
+                self._hough_max_radius = value 
+
+            @property
+            def circle_merge_ratio(self) -> float:
+                return self._circle_merge_ratio
+
+            @circle_merge_ratio.setter
+            def circle_merge_ratio(self, value: float):
+                if not (0 < value < 1):
+                    raise ValueError("合并比例必须在(0, 1]范围内")
+                self._circle_merge_ratio = value
+
+            @property
+            def intensity_diff_threshold(self) -> float:
+                return self._intensity_diff_thresh
+
+            @intensity_diff_threshold.setter
+            def intensity_diff_threshold(self, value: float):
+                if value < 0:
+                    raise ValueError("强度差阈值必须大于等于 0")
+                self._intensity_diff_thresh = value
+
+            #散落枪头检测参数
+
+            @property
+            def fallen_tip_min_aspect(self) -> float:
+                return self._fallen_tip_min_aspect
+
+            @fallen_tip_min_aspect.setter
+            def fallen_tip_min_aspect(self, value: float):
+                if value < 1.0:
+                    raise ValueError("细长比例阈值必须 >= 1.0")
+                self._fallen_tip_min_aspect = value 
+
+            @property 
+            def fallen_tip_min_area(self) -> float:
+                return self._fallen_tip_min_area
+
+            @fallen_tip_min_area.setter
+            def fallen_tip_min_area(self, value: float):
+                if value <= 0:
+                    raise ValueError("最小面积必须大于 0")
+                if value >= self._fallen_tip_max_area:
+                    raise ValueError(f"最小面积({value})不能大于等于最大面积({self._fallen_tip_max_area})")
+                self._fallen_tip_min_area = value 
+
+            @property
+            def fallen_tip_max_area(self) -> float:
+                return self._fallen_tip_max_area
+
+            @fallen_tip_max_area.setter
+            def fallen_tip_max_area(self, value: float):
+                if value <= 0:
+                   raise ValueError("最大面积必须大于 0")
+                if value <= self._fallen_tip_min__area:
+                    raise ValueError(f"最大面积({value})不能小于等于最小面积({self._fallen_tip_min_area})")
+                self._fallen_tip_max_area = value
+
+            @property
+            def fallen_tip_max_area(self) -> float:
+                return self._fallen_tip_max_area
+
+            @fallen_tip_max_area.setter
+            def fallen_tip_max_count(self, value: int):
+                if value < 0:
+                    raise ValueError("散落枪头容忍数必须 >= 0")
+                self._fallen_tip_max_count = value
+
+            @property
+            def fallen_tip_min_fill(self) -> float:
+                return self._fallen_tip_min_fill
+
+            @fallen_tip_min_fill.setter
+            def fallen_tip_min_fill(self, value: float):
+                if not (0 < value < 1):
+                    raise ValueError("最小填充率必须在 (0, 1) 范围内")
+                self._fallen_tip_min_fill = value
+
+            @property
+            def fallen_tip_min_std(self) -> float:
+                return self._fallen_tip_min_std
+
+            @fallen_tip_min_std.setter
+            def fallen_tip_min_std(self, value: float):
+                if value < 0:
+                    raise ValueError("最小亮度标准差必须 >= 0")
+            self._fallen_tip_min_std = value
+            
+
+                
+
+
+            
+
 
 
