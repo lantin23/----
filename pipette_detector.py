@@ -21,15 +21,15 @@ class DetectionResult:
     """
     检测结果数据类
     """
-    center: List[Point] = field(default_factory=list)
+    centers: List[Point] = field(default_factory=list)
     angles: List[float] = field(default_factory=list)
     radii: List[float] = field(default_factory=list)
     is_neat: bool = False
-    reason: List[str] = field(default_factory=list)
+    reasons: List[str] = field(default_factory=list)
     rows: List[List[Point]] = field(default_factory=list)
     cols: List[List[Point]] = field(default_factory=list)
     #每个点到最近槽线的偏差（单位：像素）
-    slot_deviation: List[float] = field(default_factory=list)
+    slot_deviations: List[float] = field(default_factory=list)
     #散落枪头检测结果
     fallen_tips:List[Tuple[float, float, float, float]] = field(default_factory=list) # (cx, cy, w, h)
 
@@ -37,7 +37,7 @@ class DetectionResult:
     def reason_text(self) -> str:
         if self.is_neat:
             return "整齐"
-        return ";".join(self.reason) if self.reason else "未知原因"
+        return ";".join(self.reasons) if self.reasons else "未知原因"
 
 class PipetteDetector:
     """移液枪头整齐度检测器"""
@@ -64,6 +64,7 @@ class PipetteDetector:
         self._angle_thresh: float = 6.0
         self._gaussian_kernel: int = 7
         self._canny_thresh1: int = 30
+        self._canny_thresh2: int = 90
         self._min_ciecularity: float = 0.15
         self._min_rectangularity: float = 0.3
 
@@ -120,7 +121,7 @@ class PipetteDetector:
 
     @property
     def slot_direction(self) -> str:
-        return self._slot_dirction
+        return self._slot_direction
 
     @slot_direction.setter
     def slot_direction(self, value: str):
@@ -240,6 +241,7 @@ class PipetteDetector:
     def hough_param1(self, value: float):
         if value <= 0:
             raise ValueError("param1 必须大于0")
+        self._hough_param1 = value
 
     @property
     def hough_param2(self) -> float:
@@ -327,15 +329,15 @@ class PipetteDetector:
     def fallen_tip_max_area(self, value: float):
         if value <= 0:
             raise ValueError("最大面积必须大于 0")
-        if value <= self._fallen_tip_min__area:
+        if value <= self._fallen_tip_min_area:
             raise ValueError(f"最大面积({value})不能小于等于最小面积({self._fallen_tip_min_area})")
         self._fallen_tip_max_area = value
 
     @property
-    def fallen_tip_max_area(self) -> float:
-        return self._fallen_tip_max_area
+    def fallen_tip_max_count(self) -> int:
+        return self._fallen_tip_max_count
 
-    @fallen_tip_max_area.setter
+    @fallen_tip_max_count.setter
     def fallen_tip_max_count(self, value: int):
         if value < 0:
             raise ValueError("散落枪头容忍数必须 >= 0")
