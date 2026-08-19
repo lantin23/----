@@ -360,6 +360,29 @@ class DetectionResult:
                 if value < 0:
                     raise ValueError("最小亮度标准差必须 >= 0")
             self._fallen_tip_min_std = value
+
+            #结果获取
+            @property
+            def result(self) -> DetectionResult:
+                return self._result
+
+            def is_neat(self) -> bool:
+                return self._result.is_neat
+
+            def get_reasons(self) -> List[str]:
+                return self._result.reasons
+
+            def get_centers(self) -> List[Point]:
+                return self._result.centers
+
+            def get_angles(self) -> List[float]:
+                return self._result.angles
+
+            def get_radii(self) -> List[float]:
+                return self._result.radii
+
+            
+
             
 
                 
