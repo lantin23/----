@@ -22,16 +22,16 @@ class DetectionResult:
     检测结果数据类
     """
     center: List[Point] = field(default_factory=list)
-    angles: List[float] = field(defult_factory=List)
+    angles: List[float] = field(default_factory=list)
     radii: List[float] = field(default_factory=list)
     is_neat: bool = False
     reason: List[str] = field(default_factory=list)
     rows: List[List[Point]] = field(default_factory=list)
-    cols: List[List[Point]] = field(defult_factory=list)
+    cols: List[List[Point]] = field(default_factory=list)
     #每个点到最近槽线的偏差（单位：像素）
     slot_deviation: List[float] = field(default_factory=list)
     #散落枪头检测结果
-    fallen_tips:List[Tuple[float, float, float, float]] = field(defult_factory=list) # (cx, cy, w, h)
+    fallen_tips:List[Tuple[float, float, float, float]] = field(default_factory=list) # (cx, cy, w, h)
 
     @property
     def reason_text(self) -> str:
