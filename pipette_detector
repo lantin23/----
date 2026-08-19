@@ -362,6 +362,7 @@ class DetectionResult:
             self._fallen_tip_min_std = value
 
             #结果获取
+
             @property
             def result(self) -> DetectionResult:
                 return self._result
@@ -380,6 +381,39 @@ class DetectionResult:
 
             def get_radii(self) -> List[float]:
                 return self._result.radii
+
+            #核心检测流程
+
+            def _clear_data(self):
+                self._result = DetectionResult()
+
+            def detect(self, frame: np.ndarray) -> bool:
+                """主检测函数，返回是否整齐"""
+                self._clear_data()
+
+                if frame is None or frame.size == 0:
+                    self._result.reasons.append("输入图像为空")
+                    return False
+
+                try:
+                    if self._detection_mode == "circle":
+                        self._detect_circles(frame)
+                        # 散落枪头检测：基于轮廓找非圆形的细长形状
+                        self._detect_fallen_tips(frame)
+                    else:
+                        self._detect_contours(frame)
+                except Exception as e:
+                    print(f"[检测错误] {e}")
+                    self._result.reasons.append(f"检测过程出错: {e}")
+                    return False
+
+                self._result.is_neat = self._check_neatness()
+                return self._result.is_neat
+
+            #圆形检测模式
+
+            
+
 
             
 
