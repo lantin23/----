@@ -683,7 +683,7 @@ class PipetteDetector:
                 continue
 
             # 计算内部饱和度（仅用于下方网格过滤的"暗色候选"保留判断，
-            # 不针对任何具体色相，不依赖槽/机架颜色）
+            
             interior_hsv = cv2.cvtColor(
                 interior_pixels.reshape(-1, 1, 3), cv2.COLOR_BGR2HSV
             ).reshape(-1, 3)
@@ -694,8 +694,8 @@ class PipetteDetector:
             #    候选若正好落在这些规则网格位置（圆心或正常间距中点），
             #    多半是槽间阴影而非散落枪头。
             #    例外：颜色明显偏暗但有一定饱和度（塑料材质有色）的候选，
-            #    更可能是缺失枪头/散落枪头，予以保留（用于捕捉 n3 等竖槽缺失场景）。
-            #    注意：这里只区分"暗色塑料"与"灰色阴影"，不依赖任何具体颜色。
+            #    更可能是缺失枪头/散落枪头，予以保留（用于捕捉竖槽缺失场景）。
+            
             if detected_circles and slot_direction == "vertical":
                 on_grid = self._is_on_regular_vertical_grid(cx, cy, detected_circles)
                 is_dark_saturated = mean_brightness < 65 and mean_s > 45
@@ -770,6 +770,613 @@ class PipetteDetector:
             # 且端部宽度比 > 1.15（圆头宽度 > 中段主体宽度）
             if solidity < 0.92 and end_max_ratio > 1.15:
                 real_tip_candidates.append(cand)
+
+            # ==================== 汇总散落枪头 ====================
+        # 1) 完整枪头（带圆头凸缘，通过 solidity + 端宽比验证）—— 全部标记，不再只取 1 个
+        real_tips: List[Tuple[float, float, float, float]] = [
+            (cand[1], cand[2], cand[3], cand[4]) for cand in real_tip_candidates
+        ]
+
+        # 2) 对角线散落枪头（斜跨在槽上，霍夫线检测两条平行长边）
+        diagonal_tips = self._detect_diagonal_tips(frame, slot_direction)
+
+        # 3) 合并去重：完整枪头 + 对角线枪头
+        merged_tips = self._merge_fallen_boxes(real_tips + diagonal_tips)
+
+        if merged_tips:
+            self._result.fallen_tips = merged_tips
+        else:
+            # 兜底：没有完整/对角线枪头，但仍可能有半透明反光碎片。
+            # 真实散落枪头比暗色槽壁（mean≤77）亮得多，取 mean≥80 的碎片。
+            bright_fragments: List[Tuple[float, float, float, float]] = []
+            for fx, fy, fbw, fbh in fallen:
+                x0 = max(0, int(fx - fbw / 2))
+                y0 = max(0, int(fy - fbh / 2))
+                x1 = min(gray.shape[1], int(fx + fbw / 2))
+                y1 = min(gray.shape[0], int(fy + fbh / 2))
+                if x1 <= x0 or y1 <= y0:
+                    continue
+                pixels = gray[y0:y1, x0:x1]
+                if pixels.size > 0 and float(pixels.mean()) >= 80.0:
+                    bright_fragments.append((fx, fy, fbw, fbh))
+            self._result.fallen_tips = bright_fragments
+
+    def _detect_diagonal_tips(
+        self, frame: np.ndarray, slot_direction: str
+    ) -> List[Tuple[float, float, float, float]]:
+        """
+        对角线散落枪头检测（霍夫线法）。
+
+        当枪头从槽中掉落并斜跨在槽上时，从上方俯视呈现为一条偏离槽方向
+        的细长斜线（约 25°~75°）。这类枪头的外接矩形接近正方形，无法用
+        轮廓长宽比捕捉；但其两条长边在霍夫线变换中是两条近平行的长线段，
+        据此可精确定位。
+
+        步骤：
+        1. Canny 边缘 + HoughLinesP 提取长线段
+        2. 过滤出偏离槽方向 25°~75° 的对角线段
+        3. 按"角度相近 + 中心邻近"聚类（同一枪头两条边聚为一簇）
+        4. 每簇至少 2 条线，取其外接框作为枪头位置
+        """
+        h, w = frame.shape[:2]
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        blur = cv2.GaussianBlur(gray, (5, 5), 0)
+        edges = cv2.Canny(blur, 30, 90)
+
+        lines = cv2.HoughLinesP(
+            edges, 1, np.pi / 180, threshold=50,
+            minLineLength=int(self._diag_tip_min_len), maxLineGap=20,
+        )
+        if lines is None or len(lines) == 0:
+            return []
+
+        lines = lines.reshape(-1, 4)
+        slot_angle = 90.0 if slot_direction == "vertical" else 0.0
+
+        # 1) 提取对角线段
+        segments = []
+        for x1, y1, x2, y2 in lines:
+            length = np.hypot(x2 - x1, y2 - y1)
+            angle = np.degrees(np.arctan2(y2 - y1, x2 - x1)) % 180.0
+            delta = abs(angle - slot_angle)
+            delta = min(delta, 180.0 - delta)
+            if (
+                length >= self._diag_tip_min_len
+                and self._diag_tip_min_angle <= delta <= self._diag_tip_max_angle
+            ):
+                segments.append(((x1 + x2) / 2, (y1 + y2) / 2, angle, x1, y1, x2, y2))
+
+        if not segments:
+            return []
+
+        # 2) 并查集聚类：同一枪头两条边角度相近、中心邻近
+        n = len(segments)
+        parent = list(range(n))
+
+        def _find(i):
+            while parent[i] != i:
+                parent[i] = parent[parent[i]]
+                i = parent[i]
+            return i
+
+        for i in range(n):
+            cxi, cyi, angi = segments[i][0], segments[i][1], segments[i][2]
+            for j in range(i + 1, n):
+                cxj, cyj, angj = segments[j][0], segments[j][1], segments[j][2]
+                if (
+                    abs(angj - angi) < 20.0
+                    and np.hypot(cxj - cxi, cyj - cyi) < self._diag_tip_cluster_dist
+                ):
+                    ri, rj = _find(i), _find(j)
+                    if ri != rj:
+                        parent[ri] = rj
+
+        groups = {}
+        for i in range(n):
+            groups.setdefault(_find(i), []).append(segments[i])
+
+        # 3) 每簇生成外接框
+        border = max(80, int(min(h, w) * 0.06))
+        boxes: List[Tuple[float, float, float, float]] = []
+        for group in groups.values():
+            if len(group) < 2:
+                continue
+            xs = [v for seg in group for v in (seg[3], seg[5])]
+            ys = [v for seg in group for v in (seg[4], seg[6])]
+            xmin, xmax = min(xs), max(xs)
+            ymin, ymax = min(ys), max(ys)
+            bw, bh = xmax - xmin, ymax - ymin
+            if bw < 15 or bh < 15:
+                continue
+            if xmin < border or ymin < border or xmax > w - border or ymax > h - border:
+                continue
+            boxes.append((xmin + bw / 2, ymin + bh / 2, bw, bh))
+
+        return boxes
+
+    @staticmethod
+    def _merge_fallen_boxes(
+        boxes: List[Tuple[float, float, float, float]],
+    ) -> List[Tuple[float, float, float, float]]:
+        """合并重叠或邻近的散落枪头框，避免同一枪头被重复标注。"""
+        merged: List[List[float]] = []
+        for cx, cy, bw, bh in boxes:
+            placed = False
+            for m in merged:
+                if (
+                    abs(cx - m[0]) < (bw + m[2]) / 2
+                    and abs(cy - m[1]) < (bh + m[3]) / 2
+                ):
+                    x1 = min(cx - bw / 2, m[0] - m[2] / 2)
+                    y1 = min(cy - bh / 2, m[1] - m[3] / 2)
+                    x2 = max(cx + bw / 2, m[0] + m[2] / 2)
+                    y2 = max(cy + bh / 2, m[1] + m[3] / 2)
+                    m[0], m[1], m[2], m[3] = (
+                        (x1 + x2) / 2, (y1 + y2) / 2, x2 - x1, y2 - y1,
+                    )
+                    placed = True
+                    break
+            if not placed:
+                merged.append([cx, cy, bw, bh])
+        return [(m[0], m[1], m[2], m[3]) for m in merged]
+
+    # ==================== 轮廓检测模式 ====================
+
+    def _detect_contours(self, frame: np.ndarray):
+        binary, edges = self._preprocess(frame)
+        if edges is None:
+            return
+
+        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        for contour in contours:
+            if not self._is_good_contour(contour):
+                continue
+
+            center = self._calculate_center(contour)
+            if center is None:
+                continue
+
+            angle = self._calculate_angle(contour)
+
+            self._result.centers.append(center)
+            self._result.angles.append(angle)
+
+    def _preprocess(self, frame: np.ndarray) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        blur = cv2.GaussianBlur(gray, (self._gaussian_kernel, self._gaussian_kernel), 0)
+
+        _, binary = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+        binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
+
+        edges = cv2.Canny(binary, self._canny_thresh1, self._canny_thresh2)
+        return binary, edges
+
+    def _is_good_contour(self, contour: np.ndarray) -> bool:
+        area = cv2.contourArea(contour)
+        if area < self._min_area or area > self._max_area:
+            return False
+
+        x, y, w, h = cv2.boundingRect(contour)
+        rect_area = w * h
+        if rect_area <= 0:
+            return False
+        rectangularity = area / rect_area
+        if rectangularity < self._min_rectangularity:
+            return False
+
+        perimeter = cv2.arcLength(contour, True)
+        if perimeter <= 0:
+            return False
+        circularity = 4 * np.pi * area / (perimeter * perimeter)
+        if circularity < self._min_circularity:
+            return False
+
+        return True
+
+    def _calculate_center(self, contour: np.ndarray) -> Optional[Point]:
+        m = cv2.moments(contour)
+        if m["m00"] == 0:
+            return None
+        return (float(m["m10"] / m["m00"]), float(m["m01"] / m["m00"]))
+
+    def _calculate_angle(self, contour: np.ndarray) -> float:
+        rect = cv2.minAreaRect(contour)
+        angle = rect[2]
+        if angle < -45:
+            angle += 90.0
+        return angle
+
+    def _is_on_regular_vertical_grid(
+        self, cx: float, cy: float, circles: List[Tuple[float, float, float]]
+    ) -> bool:
+        """
+        判断候选点 (cx, cy) 是否落在竖槽图像的“规则网格”上。
+        规则网格位置包括：圆心 Y，以及正常相邻间距（<=1.4 倍中位数）的中点 Y。
+        若候选落在这些位置，则视为槽间阴影/正常间隙而非散落枪头。
+        """
+        # 找到候选所在的列（按 X 聚类）
+        line = None
+        best_line_dist = float("inf")
+        for ccx, _, _ in circles:
+            d = abs(cx - ccx)
+            if d < best_line_dist:
+                best_line_dist = d
+                line = ccx
+        if line is None or best_line_dist > self._cluster_tol:
+            return False
+
+        # 该列所有圆心的 Y 值
+        ys = sorted([ccy for ccx, ccy, _ in circles if abs(ccx - line) < self._cluster_tol])
+        if len(ys) < 2:
+            return False
+
+        # 计算该列相邻圆心的间距中位数
+        gaps = [ys[i + 1] - ys[i] for i in range(len(ys) - 1)]
+        median_gap = float(np.median(gaps)) if gaps else 0.0
+        if median_gap <= 0:
+            return False
+
+        tol = min(self._cluster_tol, median_gap * 0.25)
+
+        # 检查候选 Y 是否接近某个圆心
+        for y in ys:
+            if abs(cy - y) < tol:
+                return True
+
+        # 检查候选 Y 是否接近“正常间距”的中点
+        for i in range(len(ys) - 1):
+            gap = ys[i + 1] - ys[i]
+            if gap > median_gap * 1.4:
+                # 异常大间距，不视为规则网格（可能是缺失枪头位置）
+                continue
+            mid = (ys[i] + ys[i + 1]) / 2.0
+            if abs(cy - mid) < tol:
+                return True
+
+        return False
+
+    # ==================== 整齐度判定 ====================
+
+    def _check_neatness(self) -> bool:
+        is_ok = True
+
+        if len(self._result.centers) < self._min_tips:
+            self._result.reasons.append(
+                f"枪头数量不足(检测到 {len(self._result.centers)}, 需要 {self._min_tips})"
+            )
+            is_ok = False
+
+        if self._detection_mode == "contour":
+            if not self._check_angle_consistency():
+                is_ok = False
+
+        # 散落枪头：任何"非圆形"的可疑枪头都视为不整齐
+        if len(self._result.fallen_tips) > self._fallen_tip_max_count:
+            self._result.reasons.append(
+                f"检测到 {len(self._result.fallen_tips)} 个散落/异形枪头"
+            )
+            is_ok = False
+
+        if not self._check_slot_alignment():
+            is_ok = False
+
+        if not self._check_circle_density():
+            is_ok = False
+
+        if self._check_uniform_spacing:
+            if not self._check_spacing_uniformity():
+                is_ok = False
+
+        if is_ok:
+            self._result.reasons.clear()
+            self._result.reasons.append("整齐")
+
+        return is_ok
+
+    def _check_angle_consistency(self) -> bool:
+        if not self._result.angles:
+            self._result.reasons.append("无角度数据")
+            return False
+
+        median_angle = median(self._result.angles)
+        for i, angle in enumerate(self._result.angles):
+            deviation = abs(angle - median_angle)
+            if deviation > self._angle_thresh:
+                self._result.reasons.append(
+                    f"第{i + 1}个枪头角度偏差过大({deviation:.1f}°)"
+                )
+                return False
+        return True
+
+    def _check_slot_alignment(self) -> bool:
+        """
+        槽线对齐检查。
+        将圆心按垂直于槽的方向聚类，为每个槽拟合一条直线（PCA）；
+        计算每个圆心到最近槽线的垂直距离；
+        若异常比例超过阈值，则判为不整齐。
+        """
+        if not self._result.centers:
+            self._result.reasons.append("无中心点数据")
+            return False
+
+        direction = self._determine_slot_direction()
+
+        # 拟合槽线
+        fitted_lines = self._fit_slot_lines(direction)
+        if not fitted_lines:
+            self._result.reasons.append("枪头分布过于分散，无法形成有效槽线")
+            return False
+
+        deviations = []
+        for point in self._result.centers:
+            pt = np.array(point)
+            dev = min(
+                self._point_line_distance(pt, line_pt, line_dir)
+                for line_pt, line_dir in fitted_lines
+            )
+            deviations.append(dev)
+
+        self._result.slot_deviations = deviations
+
+        outliers = [d for d in deviations if d > self._slot_alignment_tol]
+        outlier_ratio = len(outliers) / len(deviations) if deviations else 0
+
+        # 保存分行/分列结果用于可视化
+        axis = "x" if direction == "vertical" else "y"
+        self._result.rows = self._cluster_1d(
+            self._result.centers, axis=axis, tolerance=self._cluster_tol
+        )
+
+        if outlier_ratio > self._outlier_ratio_thresh:
+            self._result.reasons.append(
+                f"有 {len(outliers)} 个枪头偏离槽中心线(偏差>{self._slot_alignment_tol:.0f}px, "
+                f"占比 {outlier_ratio * 100:.1f}%)"
+            )
+            return False
+
+        return True
+
+    def _fit_slot_lines(
+        self, direction: str
+    ) -> List[Tuple[np.ndarray, np.ndarray]]:
+        """
+        对每个有效槽（聚类簇）用 PCA 拟合一条直线，返回 [(直线上一点, 方向向量), ...]。
+        可处理轻微旋转/透视导致的斜槽。
+        """
+        axis = "x" if direction == "vertical" else "y"
+        clusters = self._cluster_1d(self._result.centers, axis=axis, tolerance=self._cluster_tol)
+
+        lines: List[Tuple[np.ndarray, np.ndarray]] = []
+        for c in clusters:
+            if len(c) < self._min_tips_per_slot:
+                continue
+            pts = np.array(c, dtype=np.float64)
+            mean = np.mean(pts, axis=0)
+            if len(pts) == 1:
+                # 退化为垂直/水平方向
+                if direction == "vertical":
+                    dir_vec = np.array([0.0, 1.0])
+                else:
+                    dir_vec = np.array([1.0, 0.0])
+                lines.append((mean, dir_vec))
+                continue
+
+            centered = pts - mean
+            cov = np.cov(centered.T)
+            eigvals, eigvecs = np.linalg.eigh(cov)
+            dir_vec = eigvecs[:, np.argmax(eigvals)]
+            lines.append((mean, dir_vec))
+
+        return lines
+
+    @staticmethod
+    def _point_line_distance(
+        point: np.ndarray, line_pt: np.ndarray, line_dir: np.ndarray
+    ) -> float:
+        """点到直线的垂直距离"""
+        norm = np.linalg.norm(line_dir)
+        if norm < 1e-9:
+            return float("inf")
+        unit_dir = line_dir / norm
+        vec = point - line_pt
+        perp = vec - np.dot(vec, unit_dir) * unit_dir
+        return float(np.linalg.norm(perp))
+
+    def _check_circle_density(self) -> bool:
+        """
+        圆覆盖密度检查：若检测到的圆心凸包内，圆面积占比过低，
+        说明机架大部分区域为空（大量枪头缺失/倾倒），判为不整齐。
+        """
+        if len(self._result.centers) < 10:
+            # 点太少时不做密度判断，避免误伤局部拍摄/旋转图
+            return True
+
+        pts = np.array(self._result.centers, dtype=np.float32)
+        hull = cv2.convexHull(pts)
+        hull_area = cv2.contourArea(hull)
+        if hull_area <= 0:
+            return True
+
+        circle_area = sum(np.pi * r * r for r in self._result.radii)
+        density = circle_area / hull_area
+        min_density = 0.09
+
+        if density < min_density:
+            self._result.reasons.append(
+                f"圆覆盖密度过低({density:.1%})，存在大量空位"
+            )
+            return False
+
+        return True
+
+    def _determine_slot_direction(self) -> str:
+        """判断槽方向: vertical(竖槽) 或 horizontal(横槽)"""
+        if self._slot_direction in ("horizontal", "vertical"):
+            return self._slot_direction
+
+        # auto: 分别对 X 和 Y 聚类，选择平均簇大小更大的方向
+        x_clusters = self._cluster_1d(self._result.centers, axis="x", tolerance=self._cluster_tol)
+        y_clusters = self._cluster_1d(self._result.centers, axis="y", tolerance=self._cluster_tol)
+
+        nx = len(x_clusters)
+        ny = len(y_clusters)
+        avg_x = np.mean([len(c) for c in x_clusters]) if x_clusters else 0
+        avg_y = np.mean([len(c) for c in y_clusters]) if y_clusters else 0
+
+        x_valid = nx >= 2 and avg_x >= 2
+        y_valid = ny >= 2 and avg_y >= 2
+
+        if x_valid and y_valid:
+            return "vertical" if avg_x >= avg_y else "horizontal"
+        elif x_valid:
+            return "vertical"
+        elif y_valid:
+            return "horizontal"
+        else:
+            # 默认根据图像方向
+            return "vertical"
+
+    def _get_slot_lines(self, direction: str) -> List[float]:
+        """获取有效槽中心线坐标列表(过滤掉点数过少的噪声簇)"""
+        axis = "x" if direction == "vertical" else "y"
+        clusters = self._cluster_1d(self._result.centers, axis=axis, tolerance=self._cluster_tol)
+        return [
+            sum(p[0 if axis == "x" else 1] for p in c) / len(c)
+            for c in clusters
+            if len(c) >= self._min_tips_per_slot
+        ]
+
+    @staticmethod
+    def _cluster_1d(points: List[Point], axis: str, tolerance: float) -> List[List[Point]]:
+        """一维聚类"""
+        if not points:
+            return []
+
+        idx = 1 if axis == "y" else 0
+        sorted_points = sorted(points, key=lambda p: p[idx])
+
+        clusters: List[List[Point]] = []
+        current: List[Point] = [sorted_points[0]]
+
+        for point in sorted_points[1:]:
+            avg = sum(p[idx] for p in current) / len(current)
+            if abs(point[idx] - avg) < tolerance:
+                current.append(point)
+            else:
+                clusters.append(current)
+                current = [point]
+
+        if current:
+            clusters.append(current)
+
+        return clusters
+
+    def _check_spacing_uniformity(self) -> bool:
+        """严格间距均匀性检查(可选)"""
+        if not self._result.centers:
+            self._result.reasons.append("无中心点数据")
+            return False
+
+        direction = self._determine_slot_direction()
+        axis = "y" if direction == "vertical" else "x"
+        clusters = self._cluster_1d(self._result.centers, axis=axis, tolerance=self._cluster_tol)
+
+        if not clusters:
+            return True
+
+        for row_idx, row in enumerate(clusters):
+            if len(row) < 2:
+                continue
+
+            row_sorted = sorted(row, key=lambda p: p[0 if axis == "x" else 1])
+            spaces = []
+            for i in range(1, len(row_sorted)):
+                d = row_sorted[i][0 if axis == "x" else 1] - row_sorted[i - 1][0 if axis == "x" else 1]
+                if d > self._min_space:
+                    spaces.append(d)
+
+            if not spaces:
+                continue
+
+            ref_space = median(spaces)
+            if ref_space <= 0:
+                continue
+
+            for space in spaces:
+                error = abs(space - ref_space) / ref_space
+                if error > self._space_ratio:
+                    self._result.reasons.append(
+                        f"第{row_idx + 1}行间距不均匀(误差 {error * 100:.1f}%)"
+                    )
+                    return False
+
+        return True
+
+    # ==================== 可视化 ====================
+
+    def draw(self, frame: np.ndarray) -> np.ndarray:
+        """在帧上绘制检测结果，返回副本不修改原图"""
+        if frame is None or frame.size == 0:
+            return frame
+
+        canvas = frame.copy()
+
+        for i, center in enumerate(self._result.centers):
+            cx, cy = int(center[0]), int(center[1])
+            is_outlier = (
+                i < len(self._result.slot_deviations)
+                and self._result.slot_deviations[i] > self._slot_alignment_tol
+            )
+
+            color = (0, 0, 255) if is_outlier else (0, 255, 0)
+
+            if self._detection_mode == "circle" and i < len(self._result.radii):
+                r = int(self._result.radii[i])
+                cv2.circle(canvas, (cx, cy), r, color, 2)
+                cv2.circle(canvas, (cx, cy), max(r - 3, 3), (255, 0, 0), 1)
+            else:
+                cv2.ellipse(canvas, (cx, cy), (10, 6), self._result.angles[i], 0, 360, color, 2)
+                angle_rad = self._result.angles[i] * np.pi / 180.0
+                end_x = int(cx + 20 * np.cos(angle_rad))
+                end_y = int(cy + 20 * np.sin(angle_rad))
+                cv2.line(canvas, (cx, cy), (end_x, end_y), (0, 255, 255), 2)
+
+            cv2.circle(canvas, (cx, cy), 4, (0, 0, 255), -1)
+            cv2.putText(canvas, str(i + 1), (cx - 8, cy - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 0, 0), 1)
+
+        # 绘制散落枪头（用亮黄色矩形框标出）
+        for idx, (cx, cy, w, h) in enumerate(self._result.fallen_tips, 1):
+            x1 = int(cx - w / 2)
+            y1 = int(cy - h / 2)
+            x2 = int(cx + w / 2)
+            y2 = int(cy + h / 2)
+            cv2.rectangle(canvas, (x1, y1), (x2, y2), (0, 255, 255), 3)
+            cv2.putText(canvas, f"F{idx}", (x1, max(y1 - 5, 15)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+
+        # 结果横幅
+        result_text = "TIDY" if self._result.is_neat else "MESSY"
+        text_color = (0, 255, 0) if self._result.is_neat else (0, 0, 255)
+
+        cv2.rectangle(canvas, (10, 10), (520, 90), (0, 0, 0), -1)
+        cv2.rectangle(canvas, (10, 10), (520, 90), (255, 255, 255), 2)
+        cv2.putText(canvas, result_text, (20, 50),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, text_color, 2)
+
+        mode_text = (
+            f"Mode: {self._detection_mode} | Tips: {len(self._result.centers)}"
+            f" | Fallen: {len(self._result.fallen_tips)}"
+        )
+        cv2.putText(canvas, mode_text, (20, 78),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+
+        return canvas
+
 
 
 
