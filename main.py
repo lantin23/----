@@ -9,6 +9,8 @@ import cv2
 import numpy as np
 
 from pipette_detector import PipetteDetector
+from hardware_control import SerialController, list_ports
+from auto_control import AutoControlLoop
 
 
 # ==================== 工具函数 ====================
@@ -384,6 +386,44 @@ def process_batch_mode(detector: PipetteDetector):
             break
 
 
+def process_auto_mode(detector: PipetteDetector):
+    """自动震荡控制模式 - 串口控制硬件 + 摄像头实时检测"""
+    print("\n--- 自动震荡控制模式 (串口+硬件) ---")
+    print("流程: 震荡60s → 停止 → 检测 → 整齐则NEXT，否则再震荡(最多3轮)")
+    print("      连续3轮不整齐 → 提示手动整理 → 确认后NEXT\n")
+
+    # 串口配置
+    ports = list_ports()
+    simulate = False
+    port = None
+    if ports:
+        print(f"  检测到串口: {', '.join(ports)}")
+        port = input(f"  请输入串口名 (直接回车用 {ports[0]}): ").strip()
+        if not port:
+            port = ports[0]
+    else:
+        print("  未检测到串口 → 使用模拟模式（指令只打印，不发硬件）")
+        simulate = True
+
+    baud = safe_input_int("  波特率 (直接回车用 9600): ", 9600)
+    shake_secs = safe_input_float("  单轮震荡时长/秒 (直接回车用 60): ", 60.0)
+    rounds = safe_input_int("  最大轮数 (直接回车用 3): ", 3)
+
+    ctrl = SerialController(port=port, baudrate=baud, simulate=simulate)
+    ctrl.open()
+
+    loop = AutoControlLoop(
+        detector, ctrl,
+        shake_seconds=shake_secs,
+        max_rounds=rounds,
+    )
+    neat = loop.run()
+
+    ctrl.close()
+    print("\n流程结束。")
+    print("  最终结果:", "整齐（自动判定）" if neat else "不整齐（已手动确认后继续）")
+
+
 def _draw_help_panel(frame: np.ndarray):
     """在帧上绘制帮助面板"""
     cv2.rectangle(frame, (10, 100), (300, 260), (0, 0, 0), -1)
@@ -549,8 +589,9 @@ def main():
         print("  2. 实时摄像头检测")
         print("  3. 批量图片检测")
         print("  4. 参数配置")
-        print("  5. 退出程序")
-        print("请输入选择(1/2/3/4/5): ", end="")
+        print("  5. 自动震荡控制 (串口+硬件)")
+        print("  6. 退出程序")
+        print("请输入选择(1/2/3/4/5/6): ", end="")
 
         mode = safe_input_int("", 0)
 
@@ -563,10 +604,12 @@ def main():
         elif mode == 4:
             configure_parameters(detector)
         elif mode == 5:
+            process_auto_mode(detector)
+        elif mode == 6:
             print("\n感谢使用，再见!")
             break
         else:
-            print("  输入错误，请重新选择 (1/2/3/4/5)")
+            print("  输入错误，请重新选择 (1/2/3/4/5/6)")
 
     try:
         cv2.destroyAllWindows()
