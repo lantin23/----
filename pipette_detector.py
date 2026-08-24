@@ -45,7 +45,7 @@ class PipetteDetector:
     def __init__(self):
         #参数
         self._min_tips: int = 4
-        self._slot_aligment_tol: float = 12.0 #槽中心线对齐容差
+        self._slot_alignment_tol: float = 12.0 #槽中心线对齐容差
         self._outlier_ratio_thresh: float = 0.15 #异常枪头对比阈值
         self._min_tips_per_slot: int = 2 #有效槽至少两个枪头
         self._check_uniform_spacing: bool = False
@@ -1284,20 +1284,24 @@ class PipetteDetector:
             return False
 
         direction = self._determine_slot_direction()
-        axis = "y" if direction == "vertical" else "x"
-        clusters = self._cluster_1d(self._result.centers, axis=axis, tolerance=self._cluster_tol)
+        # 沿槽方向聚类：竖槽按 X 分成各列，横槽按 Y 分成各行
+        cluster_axis = "x" if direction == "vertical" else "y"
+        clusters = self._cluster_1d(self._result.centers, axis=cluster_axis, tolerance=self._cluster_tol)
 
         if not clusters:
             return True
 
-        for row_idx, row in enumerate(clusters):
-            if len(row) < 2:
+        # 槽内沿槽方向测量间距：竖槽比 Y，横槽比 X
+        sort_idx = 1 if direction == "vertical" else 0
+
+        for slot_idx, slot in enumerate(clusters):
+            if len(slot) < 2:
                 continue
 
-            row_sorted = sorted(row, key=lambda p: p[0 if axis == "x" else 1])
+            slot_sorted = sorted(slot, key=lambda p: p[sort_idx])
             spaces = []
-            for i in range(1, len(row_sorted)):
-                d = row_sorted[i][0 if axis == "x" else 1] - row_sorted[i - 1][0 if axis == "x" else 1]
+            for i in range(1, len(slot_sorted)):
+                d = slot_sorted[i][sort_idx] - slot_sorted[i - 1][sort_idx]
                 if d > self._min_space:
                     spaces.append(d)
 
@@ -1312,7 +1316,7 @@ class PipetteDetector:
                 error = abs(space - ref_space) / ref_space
                 if error > self._space_ratio:
                     self._result.reasons.append(
-                        f"第{row_idx + 1}行间距不均匀(误差 {error * 100:.1f}%)"
+                        f"第{slot_idx + 1}个槽间距不均匀(误差 {error * 100:.1f}%)"
                     )
                     return False
 
