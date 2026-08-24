@@ -421,7 +421,10 @@ def process_auto_mode(detector: PipetteDetector):
 
     ctrl.close()
     print("\n流程结束。")
-    print("  最终结果:", "整齐（自动判定）" if neat else "不整齐（已手动确认后继续）")
+    if loop.hw_error:
+        print("  最终结果: 硬件通信异常（ACK 超时），流程已终止，请检查串口/下位机")
+    else:
+        print("  最终结果:", "整齐（自动判定）" if neat else "不整齐（已手动确认后继续）")
 
 
 def _draw_help_panel(frame: np.ndarray):
