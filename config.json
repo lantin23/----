@@ -1,0 +1,68 @@
+{
+  "serial": {
+    "port": null,
+    "baudrate": 9600,
+    "timeout": 1.0
+  },
+  "commands": {
+    "shake_on": "SHAKE_ON",
+    "shake_off": "SHAKE_OFF",
+    "next": "NEXT",
+    "led_on": "LED_ON",
+    "led_off": "LED_OFF"
+  },
+  "ack": {
+    "enabled": true,
+    "ok": "OK",
+    "timeout": 1.5,
+    "retries": 2
+  },
+  "auto_control": {
+    "camera_index": 0,
+    "shake_seconds": 60.0,
+    "settle_seconds": 2.0,
+    "max_rounds": 3,
+    "capture_frames": 3,
+    "frame_width": 1280,
+    "frame_height": 720,
+    "show_preview": true
+  },
+  "detector": {
+    "detection_mode": "circle",
+    "slot_direction": "auto",
+    "min_tips": 4,
+    "slot_alignment_tolerance": 12.0,
+    "outlier_ratio_threshold": 0.15,
+    "min_tips_per_slot": 2,
+    "check_uniform_spacing": false,
+    "hough_min_dist": 25.0,
+    "hough_param1": 80.0,
+    "hough_param2": 20.0,
+    "hough_min_radius": 10,
+    "hough_max_radius": 40,
+    "circle_merge_ratio": 0.5,
+    "intensity_diff_threshold": 15.0,
+    "fallen_tip_min_aspect": 1.6,
+    "fallen_tip_max_aspect": 4.5,
+    "fallen_tip_min_area": 300.0,
+    "fallen_tip_max_area": 20000.0,
+    "fallen_tip_max_count": 0,
+    "fallen_tip_min_fill": 0.20,
+    "fallen_tip_min_std": 25.0,
+    "fallen_tip_max_dist_from_array": 250.0,
+    "full_tip_min_area": 5000.0,
+    "full_tip_min_dim": 160.0,
+    "full_tip_max_dim": 260.0,
+    "full_tip_min_aspect": 3.0,
+    "full_tip_max_aspect": 5.0,
+    "diag_tip_min_len": 100.0,
+    "diag_tip_min_angle": 25.0,
+    "diag_tip_max_angle": 75.0,
+    "diag_tip_cluster_dist": 50.0
+  },
+  "logging": {
+    "level": "INFO",
+    "dir": "logs",
+    "file": "app.log"
+  }
+}

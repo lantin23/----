@@ -11,6 +11,7 @@ import numpy as np
 from pipette_detector import PipetteDetector
 from hardware_control import SerialController, list_ports
 from auto_control import AutoControlLoop
+from config import load_config, setup_logging, apply_detector_config
 
 
 # ==================== 工具函数 ====================
@@ -386,36 +387,65 @@ def process_batch_mode(detector: PipetteDetector):
             break
 
 
-def process_auto_mode(detector: PipetteDetector):
+def process_auto_mode(detector: PipetteDetector, cfg=None):
     """自动震荡控制模式 - 串口控制硬件 + 摄像头实时检测"""
     print("\n--- 自动震荡控制模式 (串口+硬件) ---")
     print("流程: 震荡60s → 停止 → 检测 → 整齐则NEXT，否则再震荡(最多3轮)")
     print("      连续3轮不整齐 → 提示手动整理 → 确认后NEXT\n")
 
+    cfg = cfg or {}
+    serial_cfg = cfg.get("serial", {})
+    ack_cfg = cfg.get("ack", {})
+    cmd_cfg = cfg.get("commands", {})
+    auto_cfg = cfg.get("auto_control", {})
+
     # 串口配置
     ports = list_ports()
     simulate = False
-    port = None
+    port = serial_cfg.get("port")
     if ports:
         print(f"  检测到串口: {', '.join(ports)}")
-        port = input(f"  请输入串口名 (直接回车用 {ports[0]}): ").strip()
+        default_port = port or ports[0]
+        port = input(f"  请输入串口名 (直接回车用 {default_port}): ").strip()
         if not port:
-            port = ports[0]
+            port = default_port
     else:
         print("  未检测到串口 → 使用模拟模式（指令只打印，不发硬件）")
         simulate = True
 
-    baud = safe_input_int("  波特率 (直接回车用 9600): ", 9600)
-    shake_secs = safe_input_float("  单轮震荡时长/秒 (直接回车用 60): ", 60.0)
-    rounds = safe_input_int("  最大轮数 (直接回车用 3): ", 3)
+    baud = safe_input_int(
+        "  波特率 (直接回车用 %d): " % serial_cfg.get("baudrate", 9600),
+        serial_cfg.get("baudrate", 9600))
+    shake_secs = safe_input_float(
+        "  单轮震荡时长/秒 (直接回车用 %.0f): " % auto_cfg.get("shake_seconds", 60.0),
+        auto_cfg.get("shake_seconds", 60.0))
+    rounds = safe_input_int(
+        "  最大轮数 (直接回车用 %d): " % auto_cfg.get("max_rounds", 3),
+        auto_cfg.get("max_rounds", 3))
 
-    ctrl = SerialController(port=port, baudrate=baud, simulate=simulate)
+    ctrl = SerialController(
+        port=port,
+        baudrate=baud,
+        timeout=serial_cfg.get("timeout", 1.0),
+        commands=cmd_cfg or None,
+        simulate=simulate,
+        ack_enabled=ack_cfg.get("enabled", True),
+        ack_ok=ack_cfg.get("ok", "OK"),
+        ack_timeout=ack_cfg.get("timeout", 1.5),
+        ack_retries=ack_cfg.get("retries", 2),
+    )
     ctrl.open()
 
     loop = AutoControlLoop(
         detector, ctrl,
+        camera_index=auto_cfg.get("camera_index", 0),
         shake_seconds=shake_secs,
+        settle_seconds=auto_cfg.get("settle_seconds", 2.0),
         max_rounds=rounds,
+        capture_frames=auto_cfg.get("capture_frames", 3),
+        frame_width=auto_cfg.get("frame_width", 1280),
+        frame_height=auto_cfg.get("frame_height", 720),
+        show_preview=auto_cfg.get("show_preview", True),
     )
     neat = loop.run()
 
@@ -578,9 +608,16 @@ def _try_set_param(detector: PipetteDetector, attr: str, label: str,
 # ==================== 主函数 ====================
 
 def main():
+    cfg = load_config("config.json")
+    logger = setup_logging(cfg)
+
     print_banner()
 
     detector = PipetteDetector()
+    applied = apply_detector_config(detector, cfg)
+    if applied:
+        print(f"  已从配置应用 {len(applied)} 项检测参数")
+        logger.info("检测参数已应用 %d 项: %s", len(applied), ", ".join(applied))
 
     choice = input("是否调整检测参数? (y/n): ").strip().lower()
     if choice == 'y':
@@ -607,7 +644,7 @@ def main():
         elif mode == 4:
             configure_parameters(detector)
         elif mode == 5:
-            process_auto_mode(detector)
+            process_auto_mode(detector, cfg)
         elif mode == 6:
             print("\n感谢使用，再见!")
             break
