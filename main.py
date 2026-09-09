@@ -76,6 +76,23 @@ def safe_destroy_window(window_name: str):
         pass
 
 
+def open_camera(index: int = 0, width: int = 640, height: int = 480, fps: int = 30):
+    """打开摄像头。优先使用 index，失败则依次尝试 0~5 中可用的设备。
+
+    返回 (cap, used_index)；全部失败时返回 (None, -1)。
+    """
+    order = [index] + [i for i in range(6) if i != index]
+    for idx in order:
+        cap = cv2.VideoCapture(idx)
+        if cap.isOpened():
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+            cap.set(cv2.CAP_PROP_FPS, fps)
+            return cap, idx
+        cap.release()
+    return None, -1
+
+
 def save_screenshot(frame: np.ndarray, output_dir: str = ".") -> bool:
     """保存截图，文件名带时间戳"""
     os.makedirs(output_dir, exist_ok=True)
@@ -174,22 +191,29 @@ def process_image_mode(detector: PipetteDetector):
             break
 
 
-def process_camera_mode(detector: PipetteDetector):
+def process_camera_mode(detector: PipetteDetector, cfg=None):
     """实时摄像头检测模式"""
-    print("\n--- 实时摄像头检测模式 ---")
-    print("  正在打开摄像头...")
+    cfg = cfg or {}
+    cam_cfg = cfg.get("camera", {})
+    index = int(cam_cfg.get("index", 0))
+    width = int(cam_cfg.get("width", 640))
+    height = int(cam_cfg.get("height", 480))
+    fps = int(cam_cfg.get("fps", 30))
 
-    cap = cv2.VideoCapture(0)
-    if not cap.isOpened():
+    print("\n--- 实时摄像头检测模式 ---")
+    print(f"  正在打开摄像头 (索引 {index})...")
+
+    cap, used_index = open_camera(index, width, height, fps)
+    if cap is None:
         print("  摄像头打开失败! 请检查:")
         print("    1. 摄像头是否已连接")
         print("    2. 摄像头驱动是否正常")
         print("    3. 是否被其他程序占用")
+        print(f"    4. config.json 中 camera.index 是否正确 (当前 {index})")
         return
 
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-    cap.set(cv2.CAP_PROP_FPS, 30)
+    if used_index != index:
+        print(f"  提示: 索引 {index} 不可用，已改用索引 {used_index}")
 
     print("  摄像头已启动")
     print_controls()
@@ -638,7 +662,7 @@ def main():
         if mode == 1:
             process_image_mode(detector)
         elif mode == 2:
-            process_camera_mode(detector)
+            process_camera_mode(detector, cfg)
         elif mode == 3:
             process_batch_mode(detector)
         elif mode == 4:

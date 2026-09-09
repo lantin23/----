@@ -20,6 +20,13 @@ from copy import deepcopy
 from typing import Any, Dict, List
 
 DEFAULT_CONFIG: Dict[str, Any] = {
+    # ---- 摄像头 ----
+    "camera": {
+        "index": 0,          # 摄像头索引：0=内置，1=外置USB（Windows 下外置通常为 1 或更高）
+        "width": 640,
+        "height": 480,
+        "fps": 30,
+    },
     # ---- 串口 ----
     "serial": {
         "port": None,        # 串口名，如 "COM3"；null 表示自动检测，检测不到则模拟
