@@ -44,6 +44,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # ---- 自动震荡控制 ----
     "auto_control": {
         "camera_index": 0,
+        "camera_backend": "msmf",   # 相机后端: msmf / dshow / any（部分环境 dshow 会崩溃）
         "shake_seconds": 60.0,    # 单轮震荡时长
         "settle_seconds": 5.0,    # 停止后等待枪头静止的时长
         "max_rounds": 3,          # 最大震荡轮数

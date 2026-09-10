@@ -9,7 +9,7 @@ import cv2
 
 from pipette_detector import PipetteDetector
 from hardware_control import SerialController, list_ports
-from auto_control import AutoControlLoop, list_cameras
+from auto_control import AutoControlLoop, list_cameras, resolve_backend
 from config import load_config, setup_logging, apply_detector_config, save_config
 
 
@@ -114,6 +114,7 @@ def process_auto_mode(detector: PipetteDetector, cfg=None):
     loop = AutoControlLoop(
         detector, ctrl,
         camera_index=auto_cfg.get("camera_index", 0),
+        camera_backend=auto_cfg.get("camera_backend", "msmf"),
         shake_seconds=shake_secs,
         settle_seconds=auto_cfg.get("settle_seconds", 5.0),
         max_rounds=rounds,
@@ -138,7 +139,9 @@ def process_auto_mode(detector: PipetteDetector, cfg=None):
 def process_camera_preview(detector: PipetteDetector, cfg=None):
     """相机预览 / 切换：列出可用相机，预览并可选设为默认设备。"""
     print("\n--- 相机预览 / 切换 ---")
-    cams = list_cameras()
+    cfg = cfg or {}
+    backend_name = cfg.get("auto_control", {}).get("camera_backend", "msmf")
+    cams = list_cameras(backend_name=backend_name)
     if not cams:
         print("  [相机] 未检测到可用相机")
         return
@@ -147,7 +150,6 @@ def process_camera_preview(detector: PipetteDetector, cfg=None):
     for idx in cams:
         print(f"    [{idx}]  设备号 {idx}")
 
-    cfg = cfg or {}
     default_idx = cfg.get("auto_control", {}).get("camera_index", 0)
     idx = safe_input_int(
         f"  请输入要预览的设备号 (直接回车用 {default_idx}): ", default_idx)
@@ -155,7 +157,7 @@ def process_camera_preview(detector: PipetteDetector, cfg=None):
         print(f"  设备号 {idx} 不可用，可用设备: {cams}")
         return
 
-    cap = cv2.VideoCapture(idx, getattr(cv2, "CAP_DSHOW", cv2.CAP_ANY))
+    cap = cv2.VideoCapture(idx, resolve_backend(backend_name))
     if not cap.isOpened():
         print("  [相机] 打开失败")
         return

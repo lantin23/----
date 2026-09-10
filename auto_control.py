@@ -23,6 +23,23 @@ import numpy as np
 from hardware_control import SerialController
 
 
+def resolve_backend(name: str = "msmf"):
+    """把配置里的后端名映射为 OpenCV 后端常量。
+
+    Windows 下 DirectShow(CAP_DSHOW) 在部分环境会触发原生崩溃
+    (0xC0000005 访问违规)，默认改用较稳定的 MSMF 后端。
+    可用值: msmf / dshow / any
+    """
+    name = (name or "").strip().lower()
+    if name in ("dshow", "directshow"):
+        return getattr(cv2, "CAP_DSHOW", cv2.CAP_ANY)
+    if name in ("msmf", "mediafoundation"):
+        return getattr(cv2, "CAP_MSMF", cv2.CAP_ANY)
+    if name in ("any", "auto"):
+        return cv2.CAP_ANY
+    return getattr(cv2, "CAP_MSMF", cv2.CAP_ANY)
+
+
 class AutoControlLoop:
     """自动震荡控制循环（状态机）。"""
 
@@ -31,6 +48,7 @@ class AutoControlLoop:
         detector,
         serial_ctrl: SerialController,
         camera_index: int = 0,
+        camera_backend: str = "msmf",
         shake_seconds: float = 60.0,  #震荡时间
         settle_seconds: float = 5.0,  #等待枪头静止时间
         max_rounds: int = 3,          #最大震荡轮数
@@ -45,6 +63,7 @@ class AutoControlLoop:
         self.detector = detector
         self.serial = serial_ctrl
         self.camera_index = camera_index
+        self.camera_backend = camera_backend
         self.shake_seconds = shake_seconds
         self.settle_seconds = settle_seconds
         self.max_rounds = max_rounds
@@ -67,11 +86,11 @@ class AutoControlLoop:
     def _open_camera(self) -> bool:
         """打开摄像头并实测读帧，确认真实可用（避免 isOpened 假成功）。
 
-        Windows 上默认 MSMF 后端在无相机时 isOpened() 可能返回 True 但读不到帧，
-        优先用 DSHOW 后端，并实际 read() 一帧来验证。
+        后端由 camera_backend 配置决定（默认 MSMF 较稳定；DSHOW 在部分环境会崩溃），
+        并实际 read() 一帧来验证，避免 isOpened 假成功。
         """
-        dshow = getattr(cv2, "CAP_DSHOW", None)
-        backends = [dshow, cv2.CAP_ANY] if dshow is not None else [cv2.CAP_ANY]
+        primary = resolve_backend(self.camera_backend)
+        backends = [primary] if primary == cv2.CAP_ANY else [primary, cv2.CAP_ANY]
 
         for backend in backends:
             cap = cv2.VideoCapture(self.camera_index, backend)
@@ -248,10 +267,10 @@ class AutoControlLoop:
             self.hw_error = True
 
 
-def list_cameras(max_index: int = 8) -> List[int]:
+def list_cameras(max_index: int = 8, backend_name: str = "msmf") -> List[int]:
     """枚举当前可用摄像头设备号（实测读帧验证，避免 isOpened 假成功）。"""
-    dshow = getattr(cv2, "CAP_DSHOW", None)
-    backends = [dshow, cv2.CAP_ANY] if dshow is not None else [cv2.CAP_ANY]
+    primary = resolve_backend(backend_name)
+    backends = [primary] if primary == cv2.CAP_ANY else [primary, cv2.CAP_ANY]
     found: List[int] = []
     # 探测过程中 OpenCV 后端会打印无害告警，临时静默日志
     prev_level = cv2.getLogLevel() if hasattr(cv2, "getLogLevel") else None
