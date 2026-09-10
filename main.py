@@ -1,38 +1,29 @@
-﻿import os
+﻿"""
+枪头整齐度检测系统 v5.0 (Python 版)
+自动震荡控制: 串口控制硬件 + 摄像头实时检测
+"""
+
 import sys
-import time
-from datetime import datetime
-from pathlib import Path
-from typing import List
 
 import cv2
-import numpy as np
 
 from pipette_detector import PipetteDetector
 from hardware_control import SerialController, list_ports
-from auto_control import AutoControlLoop
-from config import load_config, setup_logging, apply_detector_config
+from auto_control import AutoControlLoop, list_cameras
+from config import load_config, setup_logging, apply_detector_config, save_config
 
 
 # ==================== 工具函数 ====================
 
 def print_banner():
     print("\n" + "=" * 55)
-    print("       枪头整齐度检测系统 v4.0 (Python)")
+    print("       枪头整齐度检测系统 v5.0 (Python)")
     print("=" * 55)
-    print("功能: 检测移液枪头是否排列整齐")
+    print("功能: 震荡后实时检测枪头是否排列整齐，并通过串口控制硬件")
     print("模式: circle(默认) - 检测枪头尾部圆形截面")
-    print("      contour       - 检测枪身轮廓(旧版场景)")
-    print("检测项: 数量、槽中心线对齐")
+    print("      contour       - 检测枪身轮廓")
+    print("检测项: 数量、槽中心线对齐、散落枪头")
     print("=" * 55 + "\n")
-
-
-def print_controls():
-    print("\n操作说明:")
-    print("  ESC    - 退出程序")
-    print("  SPACE  - 保存当前截图")
-    print("  c      - 清除统计信息")
-    print("  h      - 显示/隐藏帮助")
 
 
 def safe_input_int(prompt: str, default: int = 0) -> int:
@@ -69,347 +60,7 @@ def safe_input_yes_no(prompt: str, default: str = "y") -> bool:
         return default == "y"
 
 
-def safe_destroy_window(window_name: str):
-    try:
-        cv2.destroyWindow(window_name)
-    except cv2.error:
-        pass
-
-
-def open_camera(index: int = 0, width: int = 640, height: int = 480, fps: int = 30):
-    """打开摄像头。优先使用 index，失败则依次尝试 0~5 中可用的设备。
-
-    返回 (cap, used_index)；全部失败时返回 (None, -1)。
-    """
-    order = [index] + [i for i in range(6) if i != index]
-    for idx in order:
-        cap = cv2.VideoCapture(idx)
-        if cap.isOpened():
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-            cap.set(cv2.CAP_PROP_FPS, fps)
-            return cap, idx
-        cap.release()
-    return None, -1
-
-
-def save_screenshot(frame: np.ndarray, output_dir: str = ".") -> bool:
-    """保存截图，文件名带时间戳"""
-    os.makedirs(output_dir, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = os.path.join(output_dir, f"screenshot_{timestamp}.jpg")
-    try:
-        success = cv2.imwrite(filename, frame)
-        if success:
-            print(f"  截图已保存: {filename}")
-        else:
-            print("  截图保存失败")
-        return success
-    except cv2.error as e:
-        print(f"  截图保存异常: {e}")
-        return False
-
-
-def get_image_files(directory: str) -> List[str]:
-    """获取目录下所有图片文件"""
-    extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.webp'}
-    image_files = []
-
-    for ext in extensions:
-        image_files.extend(Path(directory).glob(f"*{ext}"))
-        image_files.extend(Path(directory).glob(f"*{ext.upper()}"))
-
-    return sorted([str(f) for f in image_files])
-
-
-# ==================== 模式处理 ====================
-
-def process_image_mode(detector: PipetteDetector):
-    """单张图片检测模式 - 支持连续检测"""
-    print("\n--- 单张图片检测模式 ---")
-    print("支持的格式: jpg, png, bmp")
-    print("输入 'q' 或 'quit' 返回主菜单\n")
-
-    window_name = "检测结果"
-
-    while True:
-        img_path = input("请输入图片路径: ").strip()
-        img_path = img_path.strip("\"' ")
-
-        if img_path.lower() in ('q', 'quit', 'exit', '退出'):
-            print("  返回主菜单")
-            safe_destroy_window(window_name)
-            break
-
-        if not img_path:
-            print("  路径为空，请重新输入")
-            continue
-
-        if not os.path.exists(img_path):
-            print(f"  文件不存在: {img_path}")
-            if not safe_input_yes_no("是否继续检测其他图片? (y/n, 默认y): ", "y"):
-                print("  返回主菜单")
-                safe_destroy_window(window_name)
-                break
-            continue
-
-        img = cv2.imread(img_path)
-        if img is None:
-            print(f"  图片读取失败: {img_path}")
-            if not safe_input_yes_no("是否继续检测其他图片? (y/n, 默认y): ", "y"):
-                print("  返回主菜单")
-                safe_destroy_window(window_name)
-                break
-            continue
-
-        print(f"  图片加载成功 (尺寸: {img.shape[1]}x{img.shape[0]})")
-
-        detector.detect(img)
-        result_img = detector.draw(img)
-
-        try:
-            cv2.imshow(window_name, result_img)
-        except cv2.error:
-            safe_destroy_window(window_name)
-            cv2.imshow(window_name, result_img)
-
-        print(f"\n  📊 检测结果: {'✓ 整齐' if detector.is_neat() else '✗ 不整齐'}")
-        print(f"  原因: {detector.result.reason_text}")
-        print(f"  检测到枪头数量: {len(detector.get_centers())}")
-
-        print("\n  按任意键继续检测下一张...")
-        key = cv2.waitKey(0)
-
-        safe_destroy_window(window_name)
-
-        if key == 27:
-            print("  返回主菜单")
-            break
-
-        if not safe_input_yes_no("\n是否继续检测其他图片? (y/n, 默认y): ", "y"):
-            print("  返回主菜单")
-            break
-
-
-def process_camera_mode(detector: PipetteDetector, cfg=None):
-    """实时摄像头检测模式"""
-    cfg = cfg or {}
-    cam_cfg = cfg.get("camera", {})
-    index = int(cam_cfg.get("index", 0))
-    width = int(cam_cfg.get("width", 640))
-    height = int(cam_cfg.get("height", 480))
-    fps = int(cam_cfg.get("fps", 30))
-
-    print("\n--- 实时摄像头检测模式 ---")
-    print(f"  正在打开摄像头 (索引 {index})...")
-
-    cap, used_index = open_camera(index, width, height, fps)
-    if cap is None:
-        print("  摄像头打开失败! 请检查:")
-        print("    1. 摄像头是否已连接")
-        print("    2. 摄像头驱动是否正常")
-        print("    3. 是否被其他程序占用")
-        print(f"    4. config.json 中 camera.index 是否正确 (当前 {index})")
-        return
-
-    if used_index != index:
-        print(f"  提示: 索引 {index} 不可用，已改用索引 {used_index}")
-
-    print("  摄像头已启动")
-    print_controls()
-
-    frame_count = 0
-    last_time = time.time()
-    fps = 0.0
-    show_help = False
-    window_name = "实时检测"
-
-    try:
-        while True:
-            ret, frame = cap.read()
-            if not ret or frame is None:
-                print("  读取帧失败，退出摄像头模式")
-                break
-
-            frame = cv2.flip(frame, 1)
-            detector.detect(frame)
-            display = detector.draw(frame)
-
-            frame_count += 1
-            current_time = time.time()
-            time_diff = current_time - last_time
-            if time_diff >= 1.0:
-                fps = frame_count / time_diff
-                last_time = current_time
-                frame_count = 0
-
-            if fps > 0:
-                fps_text = f"FPS: {int(fps)}"
-                cv2.putText(display, fps_text, (display.shape[1] - 100, 30),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
-
-            if show_help:
-                _draw_help_panel(display)
-
-            try:
-                cv2.imshow(window_name, display)
-            except cv2.error:
-                safe_destroy_window(window_name)
-                cv2.imshow(window_name, display)
-
-            key = cv2.waitKey(1) & 0xFF
-            if key == 27:
-                print("\n  退出摄像头模式...")
-                break
-            elif key == 32:
-                save_screenshot(display)
-            elif key == ord('c') or key == ord('C'):
-                print("  清除统计信息")
-            elif key == ord('h') or key == ord('H'):
-                show_help = not show_help
-
-    except KeyboardInterrupt:
-        print("\n  用户中断，退出摄像头模式")
-    finally:
-        cap.release()
-        safe_destroy_window(window_name)
-        print("  摄像头已关闭")
-
-
-def process_batch_mode(detector: PipetteDetector):
-    """批量图片检测模式"""
-    print("\n" + "=" * 50)
-    print("批量图片检测模式")
-    print("=" * 50)
-
-    window_name = "批量检测进度"
-
-    while True:
-        dir_path = input("\n请输入图片目录路径 (输入 q 返回主菜单): ").strip()
-        dir_path = dir_path.strip("\"' ")
-
-        if dir_path.lower() in ('q', 'quit', 'exit', '退出'):
-            print("  返回主菜单")
-            safe_destroy_window(window_name)
-            break
-
-        if not os.path.isdir(dir_path):
-            print(f"  目录不存在: {dir_path}")
-            if not safe_input_yes_no("是否重新输入目录? (y/n, 默认y): ", "y"):
-                print("  返回主菜单")
-                safe_destroy_window(window_name)
-                break
-            continue
-
-        image_paths = get_image_files(dir_path)
-        if not image_paths:
-            print(f"  目录中没有找到图片文件: {dir_path}")
-            if not safe_input_yes_no("是否重新输入目录? (y/n, 默认y): ", "y"):
-                print("  返回主菜单")
-                safe_destroy_window(window_name)
-                break
-            continue
-
-        print(f"  找到 {len(image_paths)} 张图片")
-
-        save_choice = input("是否保存检测结果图像? (y/n, 默认y): ").strip().lower()
-        save_images = save_choice != 'n'
-
-        output_dir = f"batch_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        if save_images:
-            os.makedirs(output_dir, exist_ok=True)
-            print(f"  结果将保存到: {output_dir}")
-
-        print("\n" + "=" * 50)
-        print("开始批量检测... (按 ESC 中断)")
-        print("=" * 50)
-
-        results = []
-        success_count = 0
-        fail_count = 0
-        total = len(image_paths)
-
-        for idx, img_path in enumerate(image_paths, 1):
-            img = cv2.imread(img_path)
-            if img is None:
-                print(f"[{idx}/{total}] ✗ {os.path.basename(img_path)} - 读取失败")
-                results.append({"file": img_path, "success": False, "error": "读取失败"})
-                continue
-
-            start_time = time.time()
-            detector.detect(img)
-            elapsed = time.time() - start_time
-
-            is_neat = detector.is_neat()
-            tip_count = len(detector.get_centers())
-            reasons = detector.get_reasons()
-
-            status = "✓" if is_neat else "✗"
-            reason_text = "整齐" if is_neat else ("; ".join(reasons) if reasons else "不整齐")
-            print(f"[{idx}/{total}] {status} {os.path.basename(img_path)} - {reason_text} (枪头:{tip_count}, {elapsed*1000:.1f}ms)")
-
-            if is_neat:
-                success_count += 1
-            else:
-                fail_count += 1
-
-            result_img = None
-            if save_images:
-                result_img = detector.draw(img)
-                save_path = os.path.join(output_dir, f"result_{idx:04d}_{os.path.basename(img_path)}")
-                cv2.imwrite(save_path, result_img)
-
-            results.append({
-                "file": os.path.basename(img_path),
-                "is_neat": is_neat,
-                "tip_count": tip_count,
-                "reasons": reasons,
-                "elapsed_ms": elapsed * 1000
-            })
-
-            if idx % 10 == 0 and save_images and result_img is not None:
-                try:
-                    cv2.imshow(window_name, result_img)
-                    if cv2.waitKey(1) & 0xFF == 27:
-                        print("\n  用户中断批量检测")
-                        break
-                except cv2.error:
-                    safe_destroy_window(window_name)
-                    cv2.imshow(window_name, result_img)
-
-        safe_destroy_window(window_name)
-
-        print("\n" + "=" * 50)
-        print("检测完成!")
-        print("=" * 50)
-        print(f"  总图片数: {total}")
-        print(f"  整齐: {success_count}")
-        print(f"  不整齐: {fail_count}")
-        print(f"  整齐率: {success_count/total*100:.1f}%" if total > 0 else "  整齐率: 0%")
-
-        if save_images:
-            report_path = os.path.join(output_dir, "report.txt")
-            with open(report_path, 'w', encoding='utf-8') as f:
-                f.write("=" * 50 + "\n")
-                f.write("批量检测报告\n")
-                f.write("=" * 50 + "\n")
-                f.write(f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write(f"总图片数: {total}\n")
-                f.write(f"整齐: {success_count}\n")
-                f.write(f"不整齐: {fail_count}\n")
-                f.write(f"整齐率: {success_count/total*100:.1f}%\n" if total > 0 else "整齐率: 0%\n")
-                f.write("\n详细结果:\n")
-                f.write("-" * 50 + "\n")
-                for r in results:
-                    f.write(f"{r['file']}: {'整齐' if r['is_neat'] else '不整齐'} (枪头:{r['tip_count']})\n")
-
-            print(f"\n  报告已保存: {report_path}")
-            print(f"  结果图像保存在: {os.path.abspath(output_dir)}")
-
-        if not safe_input_yes_no("\n是否继续检测其他目录? (y/n, 默认y): ", "y"):
-            print("  返回主菜单")
-            break
-
+# ==================== 自动控制模式 ====================
 
 def process_auto_mode(detector: PipetteDetector, cfg=None):
     """自动震荡控制模式 - 串口控制硬件 + 摄像头实时检测"""
@@ -425,7 +76,6 @@ def process_auto_mode(detector: PipetteDetector, cfg=None):
 
     # 串口配置
     ports = list_ports()
-    simulate = False
     port = serial_cfg.get("port")
     if ports:
         print(f"  检测到串口: {', '.join(ports)}")
@@ -434,8 +84,8 @@ def process_auto_mode(detector: PipetteDetector, cfg=None):
         if not port:
             port = default_port
     else:
-        print("  未检测到串口 → 使用模拟模式（指令只打印，不发硬件）")
-        simulate = True
+        print("  [错误] 未检测到可用串口，无法进行硬件控制")
+        return
 
     baud = safe_input_int(
         "  波特率 (直接回车用 %d): " % serial_cfg.get("baudrate", 9600),
@@ -452,24 +102,26 @@ def process_auto_mode(detector: PipetteDetector, cfg=None):
         baudrate=baud,
         timeout=serial_cfg.get("timeout", 1.0),
         commands=cmd_cfg or None,
-        simulate=simulate,
         ack_enabled=ack_cfg.get("enabled", True),
         ack_ok=ack_cfg.get("ok", "OK"),
         ack_timeout=ack_cfg.get("timeout", 1.5),
         ack_retries=ack_cfg.get("retries", 2),
     )
-    ctrl.open()
+    if not ctrl.open():
+        print("  [错误] 串口打开失败，无法执行自动控制")
+        return
 
     loop = AutoControlLoop(
         detector, ctrl,
         camera_index=auto_cfg.get("camera_index", 0),
         shake_seconds=shake_secs,
-        settle_seconds=auto_cfg.get("settle_seconds", 2.0),
+        settle_seconds=auto_cfg.get("settle_seconds", 5.0),
         max_rounds=rounds,
         capture_frames=auto_cfg.get("capture_frames", 3),
         frame_width=auto_cfg.get("frame_width", 1280),
         frame_height=auto_cfg.get("frame_height", 720),
         show_preview=auto_cfg.get("show_preview", True),
+        led_enabled=auto_cfg.get("led_enabled", False),
     )
     neat = loop.run()
 
@@ -481,24 +133,58 @@ def process_auto_mode(detector: PipetteDetector, cfg=None):
         print("  最终结果:", "整齐（自动判定）" if neat else "不整齐（已手动确认后继续）")
 
 
-def _draw_help_panel(frame: np.ndarray):
-    """在帧上绘制帮助面板"""
-    cv2.rectangle(frame, (10, 100), (300, 260), (0, 0, 0), -1)
-    cv2.rectangle(frame, (10, 100), (300, 260), (255, 255, 255), 2)
+# ==================== 相机预览 / 切换 ====================
 
-    lines = [
-        ("Controls:", 0.6, (255, 255, 255)),
-        ("ESC - Exit", 0.5, (200, 200, 200)),
-        ("SPACE - Screenshot", 0.5, (200, 200, 200)),
-        ("c - Clear info", 0.5, (200, 200, 200)),
-        ("h - Hide help", 0.5, (200, 200, 200)),
-    ]
-    y = 130
-    for text, scale, color in lines:
-        cv2.putText(frame, text, (20, y),
-                    cv2.FONT_HERSHEY_SIMPLEX, scale, color, 1)
-        y += 28
+def process_camera_preview(detector: PipetteDetector, cfg=None):
+    """相机预览 / 切换：列出可用相机，预览并可选设为默认设备。"""
+    print("\n--- 相机预览 / 切换 ---")
+    cams = list_cameras()
+    if not cams:
+        print("  [相机] 未检测到可用相机")
+        return
 
+    print("  检测到以下摄像头设备号:")
+    for idx in cams:
+        print(f"    [{idx}]  设备号 {idx}")
+
+    cfg = cfg or {}
+    default_idx = cfg.get("auto_control", {}).get("camera_index", 0)
+    idx = safe_input_int(
+        f"  请输入要预览的设备号 (直接回车用 {default_idx}): ", default_idx)
+    if idx not in cams:
+        print(f"  设备号 {idx} 不可用，可用设备: {cams}")
+        return
+
+    cap = cv2.VideoCapture(idx, getattr(cv2, "CAP_DSHOW", cv2.CAP_ANY))
+    if not cap.isOpened():
+        print("  [相机] 打开失败")
+        return
+    print(f"  正在预览设备号 {idx}，按 ESC 退出...")
+    try:
+        while True:
+            ret, frame = cap.read()
+            if not ret or frame is None:
+                print("  [相机] 读取画面失败")
+                break
+            detector.detect(frame)
+            display = detector.draw(frame)
+            cv2.imshow("相机预览", display)
+            if cv2.waitKey(1) & 0xFF == 27:
+                break
+    finally:
+        cap.release()
+        try:
+            cv2.destroyWindow("相机预览")
+        except cv2.error:
+            pass
+
+    if safe_input_yes_no(f"  是否将设备号 {idx} 设为默认相机? (y/n, 默认y): ", "y"):
+        cfg.setdefault("auto_control", {})["camera_index"] = idx
+        if save_config(cfg):
+            print(f"  已保存 camera_index={idx} 到 config.json，下次自动控制将使用该相机")
+
+
+# ==================== 参数配置 ====================
 
 def configure_parameters(detector: PipetteDetector):
     """参数配置"""
@@ -648,32 +334,26 @@ def main():
         configure_parameters(detector)
 
     while True:
-        print("\n请选择模式:")
-        print("  1. 单张图片检测 (可连续检测)")
-        print("  2. 实时摄像头检测")
-        print("  3. 批量图片检测")
-        print("  4. 参数配置")
-        print("  5. 自动震荡控制 (串口+硬件)")
-        print("  6. 退出程序")
-        print("请输入选择(1/2/3/4/5/6): ", end="")
+        print("\n请选择功能:")
+        print("  1. 参数配置")
+        print("  2. 自动震荡控制 (串口+硬件)")
+        print("  3. 相机预览 / 切换")
+        print("  4. 退出程序")
+        print("请输入选择(1/2/3/4): ", end="")
 
         mode = safe_input_int("", 0)
 
         if mode == 1:
-            process_image_mode(detector)
-        elif mode == 2:
-            process_camera_mode(detector, cfg)
-        elif mode == 3:
-            process_batch_mode(detector)
-        elif mode == 4:
             configure_parameters(detector)
-        elif mode == 5:
+        elif mode == 2:
             process_auto_mode(detector, cfg)
-        elif mode == 6:
+        elif mode == 3:
+            process_camera_preview(detector, cfg)
+        elif mode == 4:
             print("\n感谢使用，再见!")
             break
         else:
-            print("  输入错误，请重新选择 (1/2/3/4/5/6)")
+            print("  输入错误，请重新选择 (1/2/3/4)")
 
     try:
         cv2.destroyAllWindows()

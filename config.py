@@ -20,16 +20,9 @@ from copy import deepcopy
 from typing import Any, Dict, List
 
 DEFAULT_CONFIG: Dict[str, Any] = {
-    # ---- 摄像头 ----
-    "camera": {
-        "index": 0,          # 摄像头索引：0=内置，1=外置USB（Windows 下外置通常为 1 或更高）
-        "width": 640,
-        "height": 480,
-        "fps": 30,
-    },
     # ---- 串口 ----
     "serial": {
-        "port": None,        # 串口名，如 "COM3"；null 表示自动检测，检测不到则模拟
+        "port": None,        # 串口名，如 "COM3"；null 表示自动检测，检测不到则报错
         "baudrate": 9600,
         "timeout": 1.0,
     },
@@ -52,12 +45,13 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "auto_control": {
         "camera_index": 0,
         "shake_seconds": 60.0,    # 单轮震荡时长
-        "settle_seconds": 2.0,    # 停止后等待枪头静止的时长
+        "settle_seconds": 5.0,    # 停止后等待枪头静止的时长
         "max_rounds": 3,          # 最大震荡轮数
         "capture_frames": 3,      # 每次抓帧数（取最后一帧）
         "frame_width": 1280,
         "frame_height": 720,
         "show_preview": True,     # 是否显示检测预览窗口
+        "led_enabled": False,     # 是否启用 LED 照明控制（无 LED 硬件时设为 false）
     },
     # ---- 检测阈值（对应 PipetteDetector 的属性名） ----
     "detector": {
@@ -131,6 +125,17 @@ def load_config(path: str = "config.json") -> Dict[str, Any]:
     else:
         print(f"[配置] 未找到 {path}，使用默认配置")
     return cfg
+
+
+def save_config(cfg: Dict[str, Any], path: str = "config.json") -> bool:
+    """把配置写回文件（如切换相机后持久化）。返回是否成功。"""
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+        return True
+    except OSError as e:
+        print(f"[配置] 写入 {path} 失败({e})")
+        return False
 
 
 def setup_logging(cfg: Dict[str, Any]) -> logging.Logger:

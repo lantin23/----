@@ -1,10 +1,4 @@
 {
-  "camera": {
-    "index": 1,
-    "width": 640,
-    "height": 480,
-    "fps": 30
-  },
   "serial": {
     "port": null,
     "baudrate": 9600,
@@ -24,14 +18,15 @@
     "retries": 2
   },
   "auto_control": {
-    "camera_index": 1,
+    "camera_index": 0,
     "shake_seconds": 60.0,
-    "settle_seconds": 2.0,
+    "settle_seconds": 5.0,
     "max_rounds": 3,
     "capture_frames": 3,
     "frame_width": 1280,
     "frame_height": 720,
-    "show_preview": true
+    "show_preview": true,
+    "led_enabled": false
   },
   "detector": {
     "detection_mode": "circle",

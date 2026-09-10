@@ -1,11 +1,20 @@
 """
-检测模式：
-1. circle:基于霍夫圆变换检测移液枪头圆形尾部
-2. contour:基于轮廓检测移液枪头细长枪身
-整齐度判断策略：
-1. 枪头数量
-2. 枪头圆心到最近中心槽的距离不超过容差
-（3.）所有枪头方向一致
+PipetteDetector - 移液枪头整齐度检测器
+Python 重写版，针对"枪头尾部圆形截面"实际场景优化
+
+检测目标:
+  移液枪头插入槽中后，从上方俯视只能看到尾部截面，呈现为一个个圆形。
+  整齐状态要求这些圆排列在相互平行的槽内，每个圆的圆心都靠近对应槽的中心线。
+
+检测模式:
+  1. circle(默认): 基于霍夫圆变换检测圆形尾部
+  2. contour: 基于轮廓检测，兼容旧版细长枪身场景
+
+整齐度判定策略:
+  - 枪头数量充足
+  - 每个枪头圆心到最近槽中心线的距离不超过容差
+  - (contour 模式) 所有枪头方向一致
+  - (可选) 相邻枪头间距均匀
 """
 
 import cv2
@@ -14,13 +23,13 @@ from statistics import median
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
+
 Point = Tuple[float, float]
+
 
 @dataclass
 class DetectionResult:
-    """
-    检测结果数据类
-    """
+    """检测结果数据容器"""
     centers: List[Point] = field(default_factory=list)
     angles: List[float] = field(default_factory=list)
     radii: List[float] = field(default_factory=list)
@@ -28,47 +37,51 @@ class DetectionResult:
     reasons: List[str] = field(default_factory=list)
     rows: List[List[Point]] = field(default_factory=list)
     cols: List[List[Point]] = field(default_factory=list)
-    #每个点到最近槽线的偏差（单位：像素）
+    # 每个点到最近槽线的偏差(像素)
     slot_deviations: List[float] = field(default_factory=list)
-    #散落枪头检测结果
-    fallen_tips:List[Tuple[float, float, float, float]] = field(default_factory=list) # (cx, cy, w, h)
+    # 散落枪头（非圆形/异常形状的检测结果）
+    fallen_tips: List[Tuple[float, float, float, float]] = field(default_factory=list)
+    # (cx, cy, w, h)
 
     @property
     def reason_text(self) -> str:
         if self.is_neat:
             return "整齐"
-        return ";".join(self.reasons) if self.reasons else "未知原因"
+        return "; ".join(self.reasons) if self.reasons else "未知原因"
+
 
 class PipetteDetector:
     """移液枪头整齐度检测器"""
 
     def __init__(self):
-        #参数
+        # ================== 通用参数 ==================
         self._min_tips: int = 4
-        self._slot_alignment_tol: float = 12.0 #槽中心线对齐容差
-        self._outlier_ratio_thresh: float = 0.15 #异常枪头对比阈值
-        self._min_tips_per_slot: int = 2 #有效槽至少两个枪头
+        self._slot_alignment_tol: float = 12.0   # 槽中心线对齐容差(像素)
+        self._outlier_ratio_thresh: float = 0.15  # 异常枪头比例阈值
+        self._min_tips_per_slot: int = 2          # 有效槽最少需要几个枪头
         self._check_uniform_spacing: bool = False
         self._space_ratio: float = 0.18
         self._min_space: float = 15.0
 
-        #槽方向 "auto" | "horizontal" | "vertical"
+        # 槽方向: "auto" | "horizontal" | "vertical"
+        # horizontal: 槽水平排列，检查 Y 对齐
+        # vertical:   槽竖直排列，检查 X 对齐
         self._slot_direction: str = "auto"
 
-        #检测模式
+        # ================== 检测模式 ==================
         self._detection_mode: str = "circle"
 
-        #轮廓检测参数
+        # ================== 轮廓模式参数 ==================
         self._min_area: float = 80.0
         self._max_area: float = 5000.0
         self._angle_thresh: float = 6.0
         self._gaussian_kernel: int = 7
         self._canny_thresh1: int = 30
         self._canny_thresh2: int = 90
-        self._min_ciecularity: float = 0.15
+        self._min_circularity: float = 0.15
         self._min_rectangularity: float = 0.3
 
-        #霍夫圆检测参数
+        # ================== 圆形模式参数 ==================
         self._hough_dp: float = 1.0
         self._hough_min_dist: float = 25.0
         self._hough_param1: float = 80.0
@@ -76,47 +89,53 @@ class PipetteDetector:
         self._hough_min_radius: int = 10
         self._hough_max_radius: int = 40
         self._circle_merge_ratio: float = 0.5
-        self._circle_min_radius: float = 8.0 
+        self._circle_min_radius: float = 8.0
         self._circle_max_radius: float = 45.0
-        self._intensity_diff_thresh: float = 15.0  #外圈-内圈最小灰度差
+        self._intensity_diff_thresh: float = 15.0  # 外圈-内圈最小灰度差
 
-        #聚类容差
+        # 聚类容差
         self._cluster_tol: float = 20.0
 
-        #散落枪头检测参数（细长）
-        self._fallen_tip_min_aspect: float = 1.6       #细长比例阈值
-        self._fallen_tip_max_aspect: float = 4.5       #最大细长比（过滤槽）
-        self._fallen_tip_min_area: float = 300.0       #最小面积
-        self._fallen_tip_max_area: float = 2000.0      #最大面积
-        self._fallen_tip_min_fill: float = 0.2         #最小填充率
-        self._fallen_tip_min_std: float = 25.0         #最小亮度标准
-        self._fallen_tip_max_dist_from_array: float = 250.0 #最大距离(机架过滤)
-        self._fallen_tip_max_count: int = 0            #最大散落枪头数量(不容忍)
-        #完整枪头
-        self._full_tip_min_area: float = 5000.0        #轮廓面积阈值
-        self._full_tip_target_area: float = 9000.0     #完整枪头面积
-        self._full_tip_max_dim: float = 260.0          #最大维度上线（排除槽、隔板）
-        self._full_tip_min_dim: float = 160.0          #最小维度下线
-        self._full_tip_min_aspect: float = 3.0         #完整枪头最小细长比
-        self._full_tip_max_aspect: float = 5.0         #完整枪头最大细长比
-        #斜挎槽上枪头改用霍夫线检测两条平行边
-        self._diag_tip_min_len: float = 100.0              #线段最小长度
-        self._diag_tip_min_angle: float = 25.0         #偏离槽方向的最小夹角
-        self._diag_tip_max_angle: float = 75.0         #偏离槽方向的最大夹角
-        self._diag_tip_cluster_dist: float = 50.0      #同一枪头两条边的中心类聚距离
+        # ================== 散落枪头检测参数 ==================
+        # 用于检测掉落在槽外的枪头（呈细长形而非圆形）
+        self._fallen_tip_min_aspect: float = 1.6      # 细长比例阈值
+        self._fallen_tip_max_aspect: float = 4.5      # 最大细长比（过滤极长条 = 槽边缘）
+        self._fallen_tip_min_area: float = 300.0      # 最小面积
+        self._fallen_tip_max_area: float = 20000.0    # 最大面积
+        self._fallen_tip_min_fill: float = 0.20       # 最小填充率（锥形填充率低）
+        self._fallen_tip_min_std: float = 25.0        # 最小亮度标准差（过滤纯色区域）
+        self._fallen_tip_max_dist_from_array: float = 250.0  # 距最近圆心最大距离（颜色无关的机架纹理过滤）
+        self._fallen_tip_max_count: int = 0           # 允许的散落枪头数（0=不容忍）
 
-        #检测结果
+        # 完整散落枪头检测参数（可见完整枪头、白色/透明长锥形）
+        self._full_tip_min_area: float = 5000.0       # 轮廓面积阈值，区分完整枪头与小碎片
+        self._full_tip_target_area: float = 9000.0    # 典型完整枪头轮廓面积，越接近越可能是真实枪头
+        self._full_tip_max_dim: float = 260.0         # 最大维度上限（排除超长的槽壁/隔板）
+        self._full_tip_min_dim: float = 160.0         # 最大维度下限
+        self._full_tip_min_aspect: float = 3.0        # 完整枪头最小细长比
+        self._full_tip_max_aspect: float = 5.0        # 完整枪头最大细长比
+
+        # ================== 对角线散落枪头检测参数 ==================
+        # 斜跨在槽上的枪头从上方俯视呈现为偏离槽方向的对角长线段。
+        # 其外接矩形接近正方形，无法用轮廓长宽比捕捉，改用霍夫线检测两条平行长边。
+        self._diag_tip_min_len: float = 100.0         # 线段最小长度(像素)
+        self._diag_tip_min_angle: float = 25.0        # 偏离槽方向的最小夹角(度)
+        self._diag_tip_max_angle: float = 75.0        # 偏离槽方向的最大夹角(度)
+        self._diag_tip_cluster_dist: float = 50.0     # 同一枪头两条边的中心聚类距离
+
+        # 检测结果
         self._result = DetectionResult()
 
-    #参数getter/setter
+    # ==================== 参数 getter / setter ====================
+
     @property
     def detection_mode(self) -> str:
         return self._detection_mode
 
     @detection_mode.setter
     def detection_mode(self, value: str):
-        if value not in("circle", "contour"):
-            raise ValueError("检测模式必须是'circle' 或 'contour'")
+        if value not in ("circle", "contour"):
+            raise ValueError("检测模式必须是 'circle' 或 'contour'")
         self._detection_mode = value
 
     @property
@@ -125,8 +144,8 @@ class PipetteDetector:
 
     @slot_direction.setter
     def slot_direction(self, value: str):
-        if value not in("auto", "horizontal", "vertical"):
-            raise ValueError("槽方向必须是'auto' | 'horizontal' | 'vertical'")
+        if value not in ("auto", "horizontal", "vertical"):
+            raise ValueError("槽方向必须是 'auto' | 'horizontal' | 'vertical'")
         self._slot_direction = value
 
     @property
@@ -134,9 +153,9 @@ class PipetteDetector:
         return self._min_area
 
     @min_area.setter
-    def min_area(self, value:float):
+    def min_area(self, value: float):
         if value <= 0:
-            raise ValueError(f"最小面积必须大于0")
+            raise ValueError("最小面积必须大于 0")
         if value >= self._max_area:
             raise ValueError(f"最小面积({value})不能大于等于最大面积({self._max_area})")
         self._min_area = value
@@ -148,7 +167,7 @@ class PipetteDetector:
     @max_area.setter
     def max_area(self, value: float):
         if value <= 0:
-            raise ValueError("最大面积必须大于0")
+            raise ValueError("最大面积必须大于 0")
         if value <= self._min_area:
             raise ValueError(f"最大面积({value})不能小于等于最小面积({self._min_area})")
         self._max_area = value
@@ -160,7 +179,7 @@ class PipetteDetector:
     @angle_threshold.setter
     def angle_threshold(self, value: float):
         if value <= 0:
-            raise ValueError("角度阈值必须大于0")
+            raise ValueError("角度阈值必须大于 0")
         self._angle_thresh = value
 
     @property
@@ -170,7 +189,7 @@ class PipetteDetector:
     @space_ratio.setter
     def space_ratio(self, value: float):
         if not (0 < value < 1):
-            raise ValueError("间距偏差比例必须在(0, 1)范围内")
+            raise ValueError("间距偏差比例必须在 (0, 1) 范围内")
         self._space_ratio = value
 
     @property
@@ -180,7 +199,7 @@ class PipetteDetector:
     @min_tips.setter
     def min_tips(self, value: int):
         if value <= 0:
-            raise ValueError("最少枪头数量必须大于0")
+            raise ValueError("最少枪头数量必须大于 0")
         self._min_tips = value
 
     @property
@@ -221,7 +240,7 @@ class PipetteDetector:
     def check_uniform_spacing(self, value: bool):
         self._check_uniform_spacing = bool(value)
 
-    #圆形检测参数
+    # ---- 圆形检测参数 ----
 
     @property
     def hough_min_dist(self) -> float:
@@ -230,7 +249,7 @@ class PipetteDetector:
     @hough_min_dist.setter
     def hough_min_dist(self, value: float):
         if value <= 0:
-            raise ValueError("圆心最小距离必须大于0")
+            raise ValueError("圆心最小距离必须大于 0")
         self._hough_min_dist = value
 
     @property
@@ -240,8 +259,7 @@ class PipetteDetector:
     @hough_param1.setter
     def hough_param1(self, value: float):
         if value <= 0:
-            raise ValueError("param1 必须大于0")
-        self._hough_param1 = value
+            raise ValueError("param1 必须大于 0")
 
     @property
     def hough_param2(self) -> float:
@@ -250,7 +268,7 @@ class PipetteDetector:
     @hough_param2.setter
     def hough_param2(self, value: float):
         if value <= 0:
-            raise ValueError("param2 必须大于0")
+            raise ValueError("param2 必须大于 0")
         self._hough_param2 = value
 
     @property
@@ -260,12 +278,12 @@ class PipetteDetector:
     @hough_min_radius.setter
     def hough_min_radius(self, value: int):
         if value <= 0:
-            raise ValueError("最小半径必须大于0")
+            raise ValueError("最小半径必须大于 0")
         if value >= self._hough_max_radius:
             raise ValueError(f"最小半径({value})不能大于等于最大半径({self._hough_max_radius})")
         self._hough_min_radius = value
 
-    @property 
+    @property
     def hough_max_radius(self) -> int:
         return self._hough_max_radius
 
@@ -275,7 +293,7 @@ class PipetteDetector:
             raise ValueError("最大半径必须大于 0")
         if value <= self._hough_min_radius:
             raise ValueError(f"最大半径({value})不能小于等于最小半径({self._hough_min_radius})")
-        self._hough_max_radius = value 
+        self._hough_max_radius = value
 
     @property
     def circle_merge_ratio(self) -> float:
@@ -283,8 +301,8 @@ class PipetteDetector:
 
     @circle_merge_ratio.setter
     def circle_merge_ratio(self, value: float):
-        if not (0 < value < 1):
-            raise ValueError("合并比例必须在(0, 1]范围内")
+        if not (0 < value <= 1):
+            raise ValueError("合并比例必须在 (0, 1] 范围内")
         self._circle_merge_ratio = value
 
     @property
@@ -297,7 +315,7 @@ class PipetteDetector:
             raise ValueError("强度差阈值必须大于等于 0")
         self._intensity_diff_thresh = value
 
-    #散落枪头检测参数
+    # ---- 散落枪头检测参数 ----
 
     @property
     def fallen_tip_min_aspect(self) -> float:
@@ -307,9 +325,9 @@ class PipetteDetector:
     def fallen_tip_min_aspect(self, value: float):
         if value < 1.0:
             raise ValueError("细长比例阈值必须 >= 1.0")
-        self._fallen_tip_min_aspect = value 
+        self._fallen_tip_min_aspect = value
 
-    @property 
+    @property
     def fallen_tip_min_area(self) -> float:
         return self._fallen_tip_min_area
 
@@ -319,7 +337,7 @@ class PipetteDetector:
             raise ValueError("最小面积必须大于 0")
         if value >= self._fallen_tip_max_area:
             raise ValueError(f"最小面积({value})不能大于等于最大面积({self._fallen_tip_max_area})")
-        self._fallen_tip_min_area = value 
+        self._fallen_tip_min_area = value
 
     @property
     def fallen_tip_max_area(self) -> float:
@@ -363,7 +381,121 @@ class PipetteDetector:
             raise ValueError("最小亮度标准差必须 >= 0")
         self._fallen_tip_min_std = value
 
-    #结果获取
+    @property
+    def fallen_tip_max_aspect(self) -> float:
+        return self._fallen_tip_max_aspect
+
+    @fallen_tip_max_aspect.setter
+    def fallen_tip_max_aspect(self, value: float):
+        if value <= 1.0:
+            raise ValueError("最大细长比必须 > 1.0")
+        self._fallen_tip_max_aspect = value
+
+    @property
+    def fallen_tip_max_dist_from_array(self) -> float:
+        return self._fallen_tip_max_dist_from_array
+
+    @fallen_tip_max_dist_from_array.setter
+    def fallen_tip_max_dist_from_array(self, value: float):
+        if value < 0:
+            raise ValueError("距圆阵列最大距离必须 >= 0")
+        self._fallen_tip_max_dist_from_array = value
+
+    # ---- 完整散落枪头参数 ----
+
+    @property
+    def full_tip_min_area(self) -> float:
+        return self._full_tip_min_area
+
+    @full_tip_min_area.setter
+    def full_tip_min_area(self, value: float):
+        if value <= 0:
+            raise ValueError("完整枪头最小面积必须 > 0")
+        self._full_tip_min_area = value
+
+    @property
+    def full_tip_min_dim(self) -> float:
+        return self._full_tip_min_dim
+
+    @full_tip_min_dim.setter
+    def full_tip_min_dim(self, value: float):
+        if value <= 0:
+            raise ValueError("完整枪头最小维度必须 > 0")
+        self._full_tip_min_dim = value
+
+    @property
+    def full_tip_max_dim(self) -> float:
+        return self._full_tip_max_dim
+
+    @full_tip_max_dim.setter
+    def full_tip_max_dim(self, value: float):
+        if value <= 0:
+            raise ValueError("完整枪头最大维度必须 > 0")
+        self._full_tip_max_dim = value
+
+    @property
+    def full_tip_min_aspect(self) -> float:
+        return self._full_tip_min_aspect
+
+    @full_tip_min_aspect.setter
+    def full_tip_min_aspect(self, value: float):
+        if value < 1.0:
+            raise ValueError("完整枪头最小细长比必须 >= 1.0")
+        self._full_tip_min_aspect = value
+
+    @property
+    def full_tip_max_aspect(self) -> float:
+        return self._full_tip_max_aspect
+
+    @full_tip_max_aspect.setter
+    def full_tip_max_aspect(self, value: float):
+        if value <= 1.0:
+            raise ValueError("完整枪头最大细长比必须 > 1.0")
+        self._full_tip_max_aspect = value
+
+    # ---- 对角线散落枪头参数 ----
+
+    @property
+    def diag_tip_min_len(self) -> float:
+        return self._diag_tip_min_len
+
+    @diag_tip_min_len.setter
+    def diag_tip_min_len(self, value: float):
+        if value <= 0:
+            raise ValueError("对角线枪头线段最小长度必须 > 0")
+        self._diag_tip_min_len = value
+
+    @property
+    def diag_tip_min_angle(self) -> float:
+        return self._diag_tip_min_angle
+
+    @diag_tip_min_angle.setter
+    def diag_tip_min_angle(self, value: float):
+        if not (0 <= value < 90):
+            raise ValueError("最小夹角必须在 [0, 90) 范围内")
+        self._diag_tip_min_angle = value
+
+    @property
+    def diag_tip_max_angle(self) -> float:
+        return self._diag_tip_max_angle
+
+    @diag_tip_max_angle.setter
+    def diag_tip_max_angle(self, value: float):
+        if not (0 < value <= 90):
+            raise ValueError("最大夹角必须在 (0, 90] 范围内")
+        self._diag_tip_max_angle = value
+
+    @property
+    def diag_tip_cluster_dist(self) -> float:
+        return self._diag_tip_cluster_dist
+
+    @diag_tip_cluster_dist.setter
+    def diag_tip_cluster_dist(self, value: float):
+        if value <= 0:
+            raise ValueError("聚类距离必须 > 0")
+        self._diag_tip_cluster_dist = value
+
+    # ==================== 结果获取 ====================
 
     @property
     def result(self) -> DetectionResult:
@@ -384,7 +516,7 @@ class PipetteDetector:
     def get_radii(self) -> List[float]:
         return self._result.radii
 
-    #核心检测流程
+    # ==================== 核心检测流程 ====================
 
     def _clear_data(self):
         self._result = DetectionResult()
@@ -412,7 +544,7 @@ class PipetteDetector:
         self._result.is_neat = self._check_neatness()
         return self._result.is_neat
 
-    #圆形检测模式
+    # ==================== 圆形检测模式 ====================
 
     def _detect_circles(self, frame: np.ndarray):
         """基于霍夫圆变换检测圆形枪头尾部"""
@@ -462,7 +594,7 @@ class PipetteDetector:
         """合并同心圆/重叠圆，一个簇保留一个最大外圆"""
         if not circles:
             return []
- 
+
         sorted_idx = sorted(range(len(circles)), key=lambda i: circles[i][2], reverse=True)
         merged: List[Tuple[float, float, float]] = []
         used = set()
@@ -527,7 +659,7 @@ class PipetteDetector:
         """
         散落枪头检测：在圆形检测之后，扫描整个图像寻找"非圆形"的枪头形状。
         当枪头从槽中掉落或横放时，从上方俯视会呈现为细长形状而非圆形。
-        这些散落的枪头是"不整齐"的判断依据。
+        这些散落的枪头是"不整齐"的关键证据。
 
         检测策略:
         1. 用 Canny 边缘检测找出所有边缘轮廓
@@ -685,7 +817,7 @@ class PipetteDetector:
                 continue
 
             # 计算内部饱和度（仅用于下方网格过滤的"暗色候选"保留判断，
-            
+            # 不针对任何具体色相，不依赖槽/机架颜色）
             interior_hsv = cv2.cvtColor(
                 interior_pixels.reshape(-1, 1, 3), cv2.COLOR_BGR2HSV
             ).reshape(-1, 3)
@@ -696,8 +828,8 @@ class PipetteDetector:
             #    候选若正好落在这些规则网格位置（圆心或正常间距中点），
             #    多半是槽间阴影而非散落枪头。
             #    例外：颜色明显偏暗但有一定饱和度（塑料材质有色）的候选，
-            #    更可能是缺失枪头/散落枪头，予以保留（用于捕捉竖槽缺失场景）。
-            
+            #    更可能是缺失枪头/散落枪头，予以保留（用于捕捉 n3 等竖槽缺失场景）。
+            #    注意：这里只区分"暗色塑料"与"灰色阴影"，不依赖任何具体颜色。
             if detected_circles and slot_direction == "vertical":
                 on_grid = self._is_on_regular_vertical_grid(cx, cy, detected_circles)
                 is_dark_saturated = mean_brightness < 65 and mean_s > 45
@@ -773,7 +905,7 @@ class PipetteDetector:
             if solidity < 0.92 and end_max_ratio > 1.15:
                 real_tip_candidates.append(cand)
 
-            # ==================== 汇总散落枪头 ====================
+        # ==================== 汇总散落枪头 ====================
         # 1) 完整枪头（带圆头凸缘，通过 solidity + 端宽比验证）—— 全部标记，不再只取 1 个
         real_tips: List[Tuple[float, float, float, float]] = [
             (cand[1], cand[2], cand[3], cand[4]) for cand in real_tip_candidates
@@ -1284,24 +1416,20 @@ class PipetteDetector:
             return False
 
         direction = self._determine_slot_direction()
-        # 沿槽方向聚类：竖槽按 X 分成各列，横槽按 Y 分成各行
-        cluster_axis = "x" if direction == "vertical" else "y"
-        clusters = self._cluster_1d(self._result.centers, axis=cluster_axis, tolerance=self._cluster_tol)
+        axis = "y" if direction == "vertical" else "x"
+        clusters = self._cluster_1d(self._result.centers, axis=axis, tolerance=self._cluster_tol)
 
         if not clusters:
             return True
 
-        # 槽内沿槽方向测量间距：竖槽比 Y，横槽比 X
-        sort_idx = 1 if direction == "vertical" else 0
-
-        for slot_idx, slot in enumerate(clusters):
-            if len(slot) < 2:
+        for row_idx, row in enumerate(clusters):
+            if len(row) < 2:
                 continue
 
-            slot_sorted = sorted(slot, key=lambda p: p[sort_idx])
+            row_sorted = sorted(row, key=lambda p: p[0 if axis == "x" else 1])
             spaces = []
-            for i in range(1, len(slot_sorted)):
-                d = slot_sorted[i][sort_idx] - slot_sorted[i - 1][sort_idx]
+            for i in range(1, len(row_sorted)):
+                d = row_sorted[i][0 if axis == "x" else 1] - row_sorted[i - 1][0 if axis == "x" else 1]
                 if d > self._min_space:
                     spaces.append(d)
 
@@ -1316,7 +1444,7 @@ class PipetteDetector:
                 error = abs(space - ref_space) / ref_space
                 if error > self._space_ratio:
                     self._result.reasons.append(
-                        f"第{slot_idx + 1}个槽间距不均匀(误差 {error * 100:.1f}%)"
+                        f"第{row_idx + 1}行间距不均匀(误差 {error * 100:.1f}%)"
                     )
                     return False
 
@@ -1382,10 +1510,6 @@ class PipetteDetector:
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
 
         return canvas
-
-
-
-
 
 
             

@@ -15,17 +15,18 @@ hardware_control.py - 串口硬件控制模块
 ACK 回传（抗干扰）:
     下位机收到并执行完指令后，应回传一行 "OK\\n" 表示确认。
     软件发送后会等待 ACK；超时未收到则自动重发，重试仍失败则返回 False。
-    无硬件 / 模拟模式下自动视为成功（不等待）。
+
 用法:
     ctrl = SerialController(port="COM3", baudrate=9600)
-    ctrl.open()
-    ctrl.shake_start()
-    time.sleep(60)
-    ctrl.shake_stop()
-    ctrl.set_led(True)
-    ctrl.proceed()
-    ctrl.close()
+    if ctrl.open():
+        ctrl.shake_start()      # 发送 SHAKE_ON 并等待 OK
+        time.sleep(60)
+        ctrl.shake_stop()
+        ctrl.set_led(True)
+        ctrl.proceed()
+        ctrl.close()
 """
+
 import time
 from typing import Dict, List, Optional
 
@@ -41,7 +42,6 @@ except ImportError:
 class SerialController:
     """串口控制器：负责与下位机通信，发送震荡 / LED / 下一步指令。"""
 
-    # 默认指令协议（ASCII，发送时自动追加换行）。可传入 commands 覆盖。
     DEFAULT_COMMANDS: Dict[str, str] = {
         "shake_on": "SHAKE_ON",
         "shake_off": "SHAKE_OFF",
@@ -56,7 +56,6 @@ class SerialController:
         baudrate: int = 9600,
         timeout: float = 1.0,
         commands: Optional[Dict[str, str]] = None,
-        simulate: bool = False,
         # ---- ACK 回传配置 ----
         ack_enabled: bool = True,   # 是否等待下位机 ACK
         ack_ok: str = "OK",         # 期望的 ACK 内容（忽略大小写）
@@ -69,8 +68,6 @@ class SerialController:
         self.commands = dict(self.DEFAULT_COMMANDS)
         if commands:
             self.commands.update(commands)
-        # 未指定串口 → 模拟模式（测试）
-        self.simulate = bool(simulate) or port is None
 
         self.ack_enabled = ack_enabled
         self.ack_ok = ack_ok.strip().upper()
@@ -82,22 +79,20 @@ class SerialController:
     # ==================== 连接管理 ====================
 
     def open(self) -> bool:
-        """打开串口。失败或未指定端口时自动降级为模拟模式。"""
-        if self.simulate:
-            print("  [串口] 模拟模式：未连接真实串口，指令只打印到控制台")
-            return True
+        """打开串口。成功返回 True，失败返回 False（不降级、不模拟）。"""
         if not _SERIAL_AVAILABLE:
-            print("  [串口] 未安装 pyserial，切换为模拟模式")
-            self.simulate = True
-            return True
+            print("  [串口] 未安装 pyserial，无法连接硬件")
+            return False
+        if not self.port:
+            print("  [串口] 未指定串口名，无法连接硬件")
+            return False
         try:
             self._ser = serial.Serial(self.port, self.baudrate, timeout=self.timeout)
             print(f"  [串口] 已连接 {self.port} @ {self.baudrate}")
             return True
         except serial.SerialException as e:
-            print(f"  [串口] 打开失败({e})，切换为模拟模式")
-            self.simulate = True
-            return True
+            print(f"  [串口] 打开失败({e})，请检查端口号 / 占用情况")
+            return False
 
     def close(self):
         """关闭串口。"""
@@ -110,15 +105,12 @@ class SerialController:
 
     @property
     def is_open(self) -> bool:
-        return self.simulate or (self._ser is not None and self._ser.is_open)
+        return self._ser is not None and self._ser.is_open
 
     # ==================== 底层发送 ====================
 
     def _write_line(self, text: str):
         """发送一行指令（自动追加换行）。"""
-        if self.simulate:
-            print(f"  [串口→模拟] {text}")
-            return
         if self._ser is None or not self._ser.is_open:
             print(f"  [串口] 未连接，跳过发送: {text}")
             return
@@ -132,9 +124,6 @@ class SerialController:
 
     def send_raw(self, text: str):
         """发送自定义指令（不自动追加换行、不等 ACK）。"""
-        if self.simulate:
-            print(f"  [串口→模拟] {text!r}")
-            return
         if self._ser is not None and self._ser.is_open:
             try:
                 self._ser.write(text.encode("utf-8"))
@@ -147,7 +136,7 @@ class SerialController:
 
     def read_line(self, timeout: Optional[float] = None) -> Optional[str]:
         """读取一行下位机回传。可指定本次读取的超时秒数。"""
-        if self.simulate or self._ser is None or not self._ser.is_open:
+        if self._ser is None or not self._ser.is_open:
             return None
         old_timeout = self._ser.timeout
         try:
@@ -175,11 +164,14 @@ class SerialController:
 
     def _write_line_with_ack(self, text: str) -> bool:
         """发送一行指令并等待 ACK，超时自动重发。返回是否被确认。"""
+        if not self.is_open:
+            print(f"  [串口] 未连接，无法发送 {text!r}")
+            return False
         attempts = self.ack_retries + 1
         for attempt in range(1, attempts + 1):
             self._write_line(text)
-            # 模拟模式 / 关闭 ACK 时，视为直接成功
-            if not self.ack_enabled or self.simulate:
+            # 关闭 ACK 时，视为直接成功
+            if not self.ack_enabled:
                 return True
 
             ack = self._wait_ack()
