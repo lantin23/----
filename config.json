@@ -18,7 +18,7 @@
     "retries": 2
   },
   "auto_control": {
-    "camera_index": 0,
+    "camera_index": 1,
     "camera_backend": "msmf",
     "shake_seconds": 60.0,
     "settle_seconds": 5.0,

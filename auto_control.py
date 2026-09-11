@@ -283,7 +283,13 @@ def list_cameras(max_index: int = 8, backend_name: str = "msmf") -> List[int]:
                 if not cap.isOpened():
                     cap.release()
                     continue
-                ret, frame = cap.read()
+                # MSMF 部分相机需预热，重试读取若干次，直到拿到真实画面
+                ret, frame = False, None
+                for _ in range(5):
+                    ret, frame = cap.read()
+                    if ret and frame is not None:
+                        break
+                    time.sleep(0.2)
                 cap.release()
                 if ret and frame is not None:
                     found.append(idx)

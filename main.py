@@ -4,6 +4,7 @@
 """
 
 import sys
+import time
 
 import cv2
 
@@ -163,16 +164,23 @@ def process_camera_preview(detector: PipetteDetector, cfg=None):
         return
     print(f"  正在预览设备号 {idx}，按 ESC 退出...")
     try:
+        # MSMF 部分相机需预热/偶发读帧失败，允许连续失败若干次才判定失败
+        fail_count = 0
         while True:
             ret, frame = cap.read()
-            if not ret or frame is None:
-                print("  [相机] 读取画面失败")
-                break
-            detector.detect(frame)
-            display = detector.draw(frame)
-            cv2.imshow("相机预览", display)
-            if cv2.waitKey(1) & 0xFF == 27:
-                break
+            if ret and frame is not None:
+                fail_count = 0
+                detector.detect(frame)
+                display = detector.draw(frame)
+                cv2.imshow("相机预览", display)
+                if cv2.waitKey(1) & 0xFF == 27:
+                    break
+            else:
+                fail_count += 1
+                time.sleep(0.2)
+                if fail_count >= 5:
+                    print("  [相机] 连续读取画面失败")
+                    break
     finally:
         cap.release()
         try:
