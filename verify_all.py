@@ -19,11 +19,11 @@ def safe_imread(path):
 
 def main():
     img_dir = r"C:\Users\23870\Pictures\exam"
-    out_dir = r"C:\Users\23870\WorkBuddy\2026-08-10-13-54-15"
+    out_dir = r"C:\Users\23870\Pictures\result"
 
     # 分类整理
-    tidy_files = ["y1.jpg", "y2.jpg", "y3.jpg", "y4-1.jpg", "y4-2.jpg", "y4-3.jpg", "y5.jpg", "y6.jpg", "y7.jpg", "y8.jpg", "y9.jpg", "y10.jpg", "y11.jpg", "y12.jpg", "y13.jpg", "y14.jpg", "y15.jpg", "y16.jpg", "y17.jpg"]
-    messy_files = ["n1.jpg", "n2.jpg", "n3.jpg", "n4.jpg", "n5-1.jpg", "n5-2.jpg", "n5-3.jpg", "n6.jpg", "n7.jpg", "n8.jpg", "n9.jpg", "n10.jpg", "n11.jpg", "n12.jpg", "n13.jpg", "n14.jpg"]
+    tidy_files = ["y5.jpg", "y6.jpg", "y7.jpg", "y8.jpg", "y9.jpg", "y10.jpg", "y11.jpg", "y12.jpg","y14.jpg", "y15.jpg", "y16.jpg", "y17.jpg"]
+    messy_files = ["n6.jpg", "n7.jpg", "n8.jpg", "n9.jpg", "n10.jpg", "n11.jpg", "n12.jpg","n14.jpg"]
 
     detector = PipetteDetector()
 

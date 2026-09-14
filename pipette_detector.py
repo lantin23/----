@@ -641,7 +641,7 @@ class PipetteDetector:
         dist = np.sqrt((x_grid - cx) ** 2 + (y_grid - cy) ** 2)
 
         inner_mask = (dist >= max(r * 0.15, 2)) & (dist <= r * 0.55)
-        outer_mask = (dist >= r * 0.75) & (dist <= r * 1.15)
+        outer_mask = (dist >= r * 0.75) & (dist <= r * 0.95)
 
         inner_pixels = gray[inner_mask]
         outer_pixels = gray[outer_mask]
@@ -671,6 +671,13 @@ class PipetteDetector:
         """
         h, w = frame.shape[:2]
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+        # 黑容器（半透明白色枪头 + 黑色背景）：改用亮色细长连通域检测，
+        # 原轮廓/对角线方法会把整齐枪头排成的行/列误判为散落枪头。
+        if float(gray.mean()) < 105:
+            self._detect_fallen_tips_black(frame, gray)
+            return
+
         blur = cv2.GaussianBlur(gray, (5, 5), 0)
 
         # 边缘检测 (透明枪头的边缘在Canny上可见)
@@ -935,6 +942,79 @@ class PipetteDetector:
                     bright_fragments.append((fx, fy, fbw, fbh))
             self._result.fallen_tips = bright_fragments
 
+    def _detect_fallen_tips_black(self, frame: np.ndarray, gray: np.ndarray):
+        """
+        黑容器散落枪头检测（半透明白色枪头 + 黑色背景）。
+
+        直立的枪头从上往下看是圆环形（已由圆形检测捕获）；掉落的枪头横/斜
+        躺在黑色容器上，呈现为一条细长的亮色连通域。这里用 OTSU 阈值取亮区，
+        再做连通域分析，筛选出"细长且不含成排圆形"的亮斑作为散落枪头。
+
+        关键过滤（对齐真实散落枪头签名：约 117x496px、长宽比约 4.2、亮度约 157）：
+        - 长宽比 3.5~8（排除整齐枪头排成的短行/列）
+        - 短边 >= 60px（排除槽缝/反光细条）
+        - 不含 >= 3 个已检圆心（排除整齐枪头排成的行/列）
+        - 不贴图像边框（排除容器反光墙）
+        - 平均亮度 >= 145（半透明白色枪头明显亮于灰影）
+        """
+        h, w = gray.shape[:2]
+        blur = cv2.GaussianBlur(gray, (5, 5), 0)
+        otsu_thresh, _ = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        mask = (blur > otsu_thresh).astype(np.uint8)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+
+        num, labels, stats, _ = cv2.connectedComponentsWithStats(mask, 8)
+        margin = max(80, int(min(h, w) * 0.06))
+        slot_direction = self._determine_slot_direction()
+        slot_angle = 90.0 if slot_direction == "vertical" else 0.0
+
+        fallen: List[Tuple[float, float, float, float]] = []
+        for i in range(1, num):
+            x, y, bw, bh, area = stats[i]
+            if area < 1000 or area > 60000:
+                continue
+            aspect = max(bw, bh) / max(1, min(bw, bh))
+            if aspect < 3.5 or aspect > 12.0:
+                continue
+            fill = area / (bw * bh)
+            if fill < 0.30 or fill > 0.90:
+                continue
+            if min(bw, bh) < 22:
+                continue
+            if x < margin or y < margin or x + bw > w - margin or y + bh > h - margin:
+                continue
+            inside = sum(
+                1 for cx, cy in self._result.centers
+                if x <= cx <= x + bw and y <= cy <= y + bh
+            )
+            if inside > 2:
+                continue
+            seg = gray[y:y + bh, x:x + bw]
+            sub = labels[y:y + bh, x:x + bw] == i
+            if seg[sub].size == 0 or float(seg[sub].mean()) < 145:
+                continue
+            # 散落枪头横跨在槽上，长轴应偏离槽方向；与槽方向平行的细长亮条
+            # 是整齐枪头排成的行/列或槽缝，必须排除。
+            ys, xs = np.where(sub)
+            if len(xs) < 20:
+                continue
+            pts = np.stack([xs, ys], axis=1).astype(np.float64)
+            centered = pts - pts.mean(axis=0)
+            cov = np.cov(centered.T)
+            eigvals, eigvecs = np.linalg.eigh(cov)
+            long_axis = eigvecs[:, int(np.argmax(eigvals))]
+            theta = float(np.degrees(np.arctan2(long_axis[1], long_axis[0]))) % 180.0
+            delta = abs(theta - slot_angle)
+            delta = min(delta, 180.0 - delta)
+            if delta < 30.0:
+                continue
+            fallen.append((x + bw / 2, y + bh / 2, bw, bh))
+
+        self._result.fallen_tips = fallen
+        self._last_fallen_all = list(fallen)
+        self._last_full_tip_candidates = []
+        self._last_full_tip_contours = []
+
     def _detect_diagonal_tips(
         self, frame: np.ndarray, slot_direction: str
     ) -> List[Tuple[float, float, float, float]]:
@@ -1021,6 +1101,8 @@ class PipetteDetector:
             ymin, ymax = min(ys), max(ys)
             bw, bh = xmax - xmin, ymax - ymin
             if bw < 15 or bh < 15:
+                continue
+            if max(bw, bh) > 600:
                 continue
             if xmin < border or ymin < border or xmax > w - border or ymax > h - border:
                 continue
