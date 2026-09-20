@@ -66,7 +66,7 @@ def safe_input_yes_no(prompt: str, default: str = "y") -> bool:
 def process_auto_mode(detector: PipetteDetector, cfg=None):
     """自动震荡控制模式 - 串口控制硬件 + 摄像头实时检测"""
     print("\n--- 自动震荡控制模式 (串口+硬件) ---")
-    print("流程: 震荡60s → 停止 → 检测 → 整齐则NEXT，否则再震荡(最多3轮)")
+    print("流程: 开始100圈震荡 → 等待STOPPED → 检测 → 整齐则NEXT，否则再震荡(最多3轮)")
     print("      连续3轮不整齐 → 提示手动整理 → 确认后NEXT\n")
 
     cfg = cfg or {}
@@ -89,10 +89,10 @@ def process_auto_mode(detector: PipetteDetector, cfg=None):
         return
 
     baud = safe_input_int(
-        "  波特率 (直接回车用 %d): " % serial_cfg.get("baudrate", 9600),
-        serial_cfg.get("baudrate", 9600))
+        "  波特率 (直接回车用 %d): " % serial_cfg.get("baudrate", 115200),
+        serial_cfg.get("baudrate", 115200))
     shake_secs = safe_input_float(
-        "  单轮震荡时长/秒 (直接回车用 %.0f): " % auto_cfg.get("shake_seconds", 60.0),
+        "  震荡完成等待上限/秒 (直接回车用 %.0f): " % auto_cfg.get("shake_seconds", 60.0),
         auto_cfg.get("shake_seconds", 60.0))
     rounds = safe_input_int(
         "  最大轮数 (直接回车用 %d): " % auto_cfg.get("max_rounds", 3),
@@ -180,7 +180,7 @@ def process_camera_preview(detector: PipetteDetector, cfg=None):
                 cv2.imshow("相机预览", display)
                 if cv2.waitKey(1) & 0xFF == 27:
                     break
-            else:n
+            else:
                 fail_count += 1
                 time.sleep(0.2)
                 if fail_count >= 5:

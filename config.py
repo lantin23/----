@@ -23,7 +23,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # ---- 串口 ----
     "serial": {
         "port": None,        # 串口名，如 "COM3"；null 表示自动检测，检测不到则报错
-        "baudrate": 9600,
+        "baudrate": 115200,
         "timeout": 1.0,
     },
     # ---- 指令协议（发给下位机的 ASCII 文本） ----

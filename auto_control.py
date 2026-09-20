@@ -5,7 +5,7 @@ auto_control.py - 自动震荡-检测-决策控制循环
 程序控制时序:
 
   1. 打开 LED 照明（可选，led_enabled）
-  2. 开始震荡 -> 计时(默认 60 秒) -> 停止震荡
+  2. 开始100圈运动 -> 等待单片机 STOPPED 完成通知
   3. 等待枪头静止，从摄像头抓帧并检测整齐度
   4. 若整齐        -> 发送 NEXT，结束
   5. 若不整齐      -> 再次震荡（最多重复 max_rounds 轮）
@@ -74,7 +74,7 @@ class AutoControlLoop:
         serial_ctrl: SerialController,
         camera_index: int = 0,
         camera_backend: str = "msmf",
-        shake_seconds: float = 60.0,  #震荡时间
+        shake_seconds: float = 60.0,  # 兼容旧配置：完成等待上限参考值，不控制电机圈数
         settle_seconds: float = 5.0,  #等待枪头静止时间
         max_rounds: int = 3,          #最大震荡轮数
         capture_frames: int = 3,
@@ -207,16 +207,14 @@ class AutoControlLoop:
                     self.hw_error = True
                     break
 
-                # 2. 计时震荡
-                self._wait_with_countdown(self.shake_seconds, "震荡中")
-
-                # 3. 停止震荡
-                if not self.serial.shake_stop():
-                    print("  [错误] 震荡停止未被硬件确认（ACK 超时），终止本轮控制")
+                # 2. 以电机到位通知为准，不再定时发送 SHAKE_OFF。
+                # 固件60秒超时，留5秒用于接收其错误响应。
+                if not self.serial.wait_stopped(timeout=max(65.0, self.shake_seconds + 5.0)):
+                    print("  [错误] 未确认100圈完成（STOPPED 超时或电机报错），取消检测")
                     self.hw_error = True
                     break
 
-                # 4. 等待枪头静止
+                # 3. 等待枪头静止
                 self._wait_with_countdown(self.settle_seconds, "等待枪头静止")
 
                 # 5. 抓帧检测
@@ -253,8 +251,10 @@ class AutoControlLoop:
                     final_neat = True
                     print("  → 整齐，发送 NEXT（进行下一步）")
                     if not self.serial.proceed():
-                        print("  [错误] NEXT 未被硬件确认（ACK 超时）")
+                        print("  [错误] NEXT 未完成（启动未确认、NEXT_DONE 超时或电机报错）")
                         self.hw_error = True
+                    else:
+                        print("  → 收到 NEXT_DONE，电机2到位、电机3往返脉冲发送完成")
                     break
                 if round_no < self.max_rounds:
                     print(f"  → 不整齐，进入第 {round_no + 1} 轮震荡")
@@ -289,9 +289,9 @@ class AutoControlLoop:
             except (KeyboardInterrupt, EOFError):
                 pass
         if self.serial.proceed():
-            print("  → 已确认，发送 NEXT（进行下一步）")
+            print("  → 收到 NEXT_DONE，电机2到位、电机3往返脉冲发送完成")
         else:
-            print("  [错误] NEXT 未被硬件确认（ACK 超时）")
+            print("  [错误] NEXT 未完成（启动未确认、NEXT_DONE 超时或电机报错）")
             self.hw_error = True
 
 

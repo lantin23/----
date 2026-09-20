@@ -24,8 +24,8 @@
 ├── pipette_detector.py  # 视觉检测核心（整齐度判定）
 ├── config.py            # 配置加载 + 日志初始化
 ├── config.json          # 运行参数（串口 / 指令 / 阈值 / 日志）
-├── requirements.txt     # Python 依赖
-└── verify_all.py        # 批量回归测试（开发用）
+├── verify_all.py        # 批量回归测试（开发用）
+└── live_check.py        # 实时摄像头单帧检测（开发用）
 ```
 
 ---
@@ -44,10 +44,10 @@
 
 ## 安装
 
-需要 Python 3.8+，在 Windows 上运行（相机使用 DirectShow 后端）。
+需要 Python 3.8+，在 Windows 上运行（相机默认使用 MSMF 后端，部分环境可改为 dshow）。
 
 ```bash
-pip install -r requirements.txt
+pip install opencv-python numpy pyserial
 ```
 
 依赖：
@@ -95,11 +95,17 @@ python main.py
 
 ### ACK 回传（抗干扰）
 
-下位机收到并**执行完**指令后，应回传一行 `OK\n` 表示确认。
+下位机回传分两类：**接受确认（OK）** 与 **完成通知**。
 
-- 软件发送后等待 ACK（`ack.timeout` 秒，默认 1.5s）。
-- 未收到则自动重发，最多额外重发 `ack.retries` 次（默认 2 次，总尝试 3 次）。
-- 全部失败则返回 `False`，程序终止当前控制流程并报「硬件通信异常」。
+| 指令 | 接受确认 | 完成通知 | 含义 |
+|------|---------|---------|------|
+| `SHAKE_ON` | `OK` | `STOPPED` | 100 圈震荡到位 |
+| `NEXT` | `OK` | `NEXT_DONE` | 电机2往返到位、电机3往返脉冲发完 |
+| `SHAKE_OFF` / `LED_ON` / `LED_OFF` | `OK` | — | 立即执行完成 |
+
+- **运动指令（`SHAKE_ON` / `NEXT`）只发一次、不自动重发**，避免 ACK 丢失导致重复运动；收不到 `OK` 则终止流程并提示检查电机状态。
+- 其余指令（`SHAKE_OFF` / LED）未收到 `OK` 会自动重发，最多额外重发 `ack.retries` 次（默认 2 次）。
+- 收到 `ERROR` / `BUSY` 视为失败并终止流程。
 - ACK 匹配忽略大小写；`ack.enabled = false` 可关闭等待（不推荐）。
 
 ---
@@ -108,9 +114,9 @@ python main.py
 
 ```
 打开 LED
-  └─ 第 1 轮：开始震荡(SHAKE_ON) → 震荡 60s → 停止(SHAKE_OFF)
+  └─ 第 1 轮：开始100圈震荡(SHAKE_ON) → 等待 STOPPED 完成通知
        → 静止等待 → 抓帧检测
-       ├─ 整齐   → 发送 NEXT，结束
+       ├─ 整齐   → 发送 NEXT → 等待 NEXT_DONE，结束
        └─ 不整齐 → 进入下一轮震荡（最多 3 轮）
   └─ 连续 3 轮不整齐 → 提示用户手动整理 → 确认后发送 NEXT
 关闭 LED
@@ -121,7 +127,7 @@ python main.py
 | 参数 | 默认 | 说明 |
 |------|------|------|
 | `camera_index` | 0 | 摄像头设备号（多相机时调整） |
-| `shake_seconds` | 60.0 | 单轮震荡时长（秒） |
+| `shake_seconds` | 60.0 | 震荡完成等待上限（秒），实际由电机 100 圈到位 `STOPPED` 决定 |
 | `settle_seconds` | 5.0 | 停止后等待枪头静止的时长（秒） |
 | `max_rounds` | 3 | 最大震荡轮数 |
 | `capture_frames` | 3 | 每次抓帧数（取最后一帧） |
@@ -150,6 +156,8 @@ python main.py
 
 默认使用 `circle` 模式：检测枪头尾部圆形截面（霍夫圆），并结合散落枪头检测。
 
+系统根据画面平均亮度自动区分容器颜色（灰度均值 < 105 判为**黑容器**），黑/浅容器分别走不同的散落枪头检测逻辑，圆形与槽对齐判定共用同一套。
+
 ### 整齐度判定相关
 
 | 参数 | 默认 | 含义 |
@@ -173,15 +181,20 @@ python main.py
 
 ### 散落枪头检测
 
+根据容器颜色分两条路径：
+
+- **黑容器（白色枪头）**：直立枪头俯视是圆环（已由圆形检测捕获），散落枪头则是细长实心亮条。用 OTSU 阈值取亮区后做连通域分析，筛选「细长、明亮、实心、且不含成排圆形」的亮斑，再用最小旋转矩形精确定位斜躺枪头。筛选阈值在 `pipette_detector.py` 的 `_detect_fallen_tips_black` 中硬编码（长宽比 3.5~12、填充率 0.5~0.9、面积 1000~60000、亮度均值 ≥ 145）。
+- **浅容器**：沿用轮廓法判别细长形散落枪头，参数由下表控制。
+
 | 参数 | 默认 | 含义 |
 |------|------|------|
-| `fallen_tip_min_aspect` / `fallen_tip_max_aspect` | 1.6 / 4.5 | 细长形散落枪头长宽比范围 |
+| `fallen_tip_min_aspect` / `fallen_tip_max_aspect` | 1.6 / 4.5 | 细长形散落枪头长宽比范围（浅容器） |
 | `fallen_tip_min_area` / `fallen_tip_max_area` | 300 / 20000 | 面积范围 |
 | `fallen_tip_max_count` | 0 | 容忍的散落枪头数（0 = 不容忍） |
 | `full_tip_min_area` 等 | — | 完整散落枪头（可见长锥形）判别 |
 | `diag_tip_min_angle` / `diag_tip_max_angle` | 25 / 75 | 斜跨枪头角度范围 |
 
-> 完整参数与含义见 `config.json` 及 `config.py` 中的中文注释。
+> 浅容器参数见 `config.json` 及 `config.py` 中的中文注释。
 
 ---
 
@@ -206,10 +219,12 @@ python main.py
 
 ## 开发 / 测试
 
-`verify_all.py` 是对 13 张样例图（6 张整齐 + 7 张不整齐）的批量回归脚本，用于验证检测器改动不破坏分类正确性：
+`verify_all.py` 对 `C:\Users\23870\Pictures\exam` 下的样例图（20 张整齐 `y*` + 33 张不整齐 `n*`）做批量回归，逐张输出「期望 / 实际」对比表，并把结果图保存到 `C:\Users\23870\Pictures\result\verify_*.png`：
 
 ```bash
 python verify_all.py
 ```
 
-（脚本内图片目录路径为开发环境硬编码，使用前需按需修改。）
+（脚本内图片目录为开发环境硬编码，使用前需按需修改。）
+
+`live_check.py` 抓取实时摄像头一帧并运行检测，在控制台打印圆形数、散落数、判定结果，并把结果图保存为 `live_result.png`。

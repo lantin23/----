@@ -13,17 +13,16 @@ hardware_control.py - 串口硬件控制模块
     LED_OFF    关闭 LED 照明
 
 ACK 回传（抗干扰）:
-    下位机收到并执行完指令后，应回传一行 "OK\\n" 表示确认。
-    软件发送后会等待 ACK；超时未收到则自动重发，重试仍失败则返回 False。
+    SHAKE_ON 被接受后返回 OK，100 圈到位后另行返回 STOPPED。
+    NEXT 被接受后返回 OK，电机2往返到位、电机3往返脉冲发完后返回 NEXT_DONE。
+    SHAKE_ON / NEXT 不自动重发，避免 ACK 丢失导致重复运动。
 
 用法:
-    ctrl = SerialController(port="COM3", baudrate=9600)
+    ctrl = SerialController(port="COM3", baudrate=115200)
     if ctrl.open():
-        ctrl.shake_start()      # 发送 SHAKE_ON 并等待 OK
-        time.sleep(60)
-        ctrl.shake_stop()
-        ctrl.set_led(True)
-        ctrl.proceed()
+        if ctrl.shake_start() and ctrl.wait_stopped():
+            # 此时才可开始相机检测
+            pass
         ctrl.close()
 """
 
@@ -53,7 +52,7 @@ class SerialController:
     def __init__(
         self,
         port: Optional[str] = None,
-        baudrate: int = 9600,
+        baudrate: int = 115200,
         timeout: float = 1.0,
         commands: Optional[Dict[str, str]] = None,
         # ---- ACK 回传配置 ----
@@ -75,6 +74,7 @@ class SerialController:
         self.ack_retries = ack_retries
 
         self._ser = None
+        self._shake_pending = False
 
     # ==================== 连接管理 ====================
 
@@ -153,12 +153,15 @@ class SerialController:
 
     def _wait_ack(self) -> Optional[str]:
         """等待下位机回传一行，最多 ack_timeout 秒。"""
-        deadline = time.time() + self.ack_timeout
+        deadline = time.monotonic() + self.ack_timeout
         while True:
-            remaining = deadline - time.time()
+            remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return None
             line = self.read_line(timeout=remaining)
+            if line and line.startswith("DBG "):
+                print(f"  [诊断] {line}")
+                continue
             if line:
                 return line
 
@@ -196,16 +199,72 @@ class SerialController:
     # ==================== 高层动作（返回是否被 ACK 确认） ====================
 
     def shake_start(self) -> bool:
-        """开始震荡。"""
-        return self._send_cmd("shake_on")
+        """启动一次100圈动作，必须收到 OK；不自动重发运动指令。"""
+        self._shake_pending = False
+        self._shake_pending = self._start_motion("shake_on")
+        return self._shake_pending
+
+    def _start_motion(self, key: str) -> bool:
+        """只发送一次运动命令并等待接受确认，失败时不盲目重发。"""
+        if not self.is_open:
+            return False
+        command = self.commands[key]
+        try:
+            # 仅在新动作开始前清理旧响应，OK 与完成通知之间不能清空。
+            self._ser.reset_input_buffer()
+            payload = (command + "\n").encode("utf-8")
+            if self._ser.write(payload) != len(payload):
+                print(f"  [串口] {command} 未完整发送，终止流程")
+                return False
+            self._ser.flush()
+        except OSError as exc:
+            print(f"  [串口] {command} 发送失败: {exc}")
+            return False
+        print(f"  [串口→] {command}")
+        ack = self._wait_ack()
+        if ack is not None and ack.upper() == self.ack_ok:
+            print(f"  [串口←] ACK {ack}")
+            return True
+        print(f"  [串口] 启动未确认（收到 {ack!r}），不自动重发；请检查电机状态")
+        return False
+
+    def wait_stopped(self, timeout: float = 65.0) -> bool:
+        """等待本轮 STOPPED；错误或超时均不允许开始检测。"""
+        if not self.is_open or not getattr(self, "_shake_pending", False):
+            return False
+        self._shake_pending = False
+        return self._wait_completion("STOPPED", timeout)
+
+    def _wait_completion(self, expected: str, timeout: float) -> bool:
+        """接受确认不是完成确认；只认对应的完成信号。"""
+        deadline = time.monotonic() + timeout
+        print(f"  等待电机完成通知 {expected}（最多 {timeout:g} 秒）...")
+        while self.is_open:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            line = self.read_line(timeout=remaining)
+            if not line:
+                continue
+            print(f"  [串口←] {line}")
+            status = line.strip().upper()
+            if status == expected:
+                return True
+            if status.startswith("ERROR") or status == "BUSY":
+                return False
+        print(f"  [串口] 未收到 {expected}，不能确认动作已完成，终止流程")
+        return False
 
     def shake_stop(self) -> bool:
         """停止震荡。"""
         return self._send_cmd("shake_off")
 
-    def proceed(self) -> bool:
-        """进行下一步动作。"""
-        return self._send_cmd("next")
+    def proceed(self, timeout: float = 40.0) -> bool:
+        """NEXT只发一次；收到OK后等待电机2、3动作链完成NEXT_DONE。"""
+        if not self._start_motion("next"):
+            return False
+        # 固件每段8秒超时，共四段，另留处理和串口传输余量。
+        return self._wait_completion("NEXT_DONE", timeout)
 
     def set_led(self, on: bool) -> bool:
         """打开 / 关闭 LED 照明。"""

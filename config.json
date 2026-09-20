@@ -1,7 +1,7 @@
 {
   "serial": {
     "port": null,
-    "baudrate": 9600,
+    "baudrate": 115200,
     "timeout": 1.0
   },
   "commands": {
