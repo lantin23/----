@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>枪头整齐度检测 · 数据分析报告</title>
+<style>
+:root { --page:#f9f9f7; --surface:#fcfcfb; --text:#0b0b0b; --text2:#52514e; --muted:#898781;
+  --gridline:#e1e0d9; --baseline:#c3c2b7; --border:rgba(11,11,11,.10);
+  --blue:#2a78d6; --orange:#eb6834; --aqua:#1baf7a; --yellow:#eda100; --red:#e34948;
+  --good:#0ca30c; --warning:#fab219; --critical:#d03b3b; --serious:#ec835a; }
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) { --page:#0d0d0d; --surface:#1a1a19; --text:#ffffff; --text2:#c3c2b7;
+    --muted:#898781; --gridline:#2c2c2a; --baseline:#383835; --border:rgba(255,255,255,.10);
+    --blue:#3987e5; --orange:#d95926; --aqua:#199e70; --yellow:#c98500; --red:#e66767;
+    --good:#0ca30c; --warning:#fab219; --critical:#d03b3b; --serious:#ec835a; } }
+:root[data-theme="dark"] { --page:#0d0d0d; --surface:#1a1a19; --text:#ffffff; --text2:#c3c2b7;
+  --muted:#898781; --gridline:#2c2c2a; --baseline:#383835; --border:rgba(255,255,255,.10);
+  --blue:#3987e5; --orange:#d95926; --aqua:#199e70; --yellow:#c98500; --red:#e66767;
+  --good:#0ca30c; --warning:#fab219; --critical:#d03b3b; --serious:#ec835a; }
+
+* { box-sizing:border-box; }
+body { margin:0; background:var(--page); color:var(--text);
+  font-family:system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif; line-height:1.55; }
+.wrap { max-width:1080px; margin:0 auto; padding:32px 20px 64px; }
+header { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; }
+h1 { font-size:22px; margin:0; font-weight:650; }
+.sub { color:var(--text2); font-size:13px; margin-top:4px; }
+.theme-btn { font-size:12px; padding:6px 12px; border:1px solid var(--border); background:var(--surface);
+  color:var(--text2); border-radius:8px; cursor:pointer; }
+h2 { font-size:15px; margin:40px 0 14px; font-weight:650; }
+p.lead { color:var(--text2); font-size:13.5px; margin:0 0 8px; }
+
+/* KPI */
+.kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:14px; margin-top:22px; }
+.kpi { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:16px 18px; }
+.kpi .v { font-size:30px; font-weight:700; letter-spacing:-.5px; }
+.kpi .l { color:var(--text2); font-size:12.5px; margin-top:4px; }
+.kpi.neg .v { color:var(--critical); }
+.kpi.pos .v { color:var(--good); }
+
+/* 图表卡片 */
+.card { background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:20px 22px; }
+.grid2 { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+@media (max-width:760px) { .grid2 { grid-template-columns:1fr; } }
+svg { width:100%; height:auto; display:block; }
+.tick { fill:var(--muted); font-size:10px; }
+.bar-label { fill:var(--text2); font-size:12px; }
+.bar-val { fill:var(--text); font-size:13px; font-weight:600; }
+.donut-label { fill:var(--text); font-size:13px; font-weight:600; }
+.donut-center-num { fill:var(--text); font-size:30px; font-weight:700; }
+.donut-center-sub { fill:var(--text2); font-size:12px; }
+.legend { display:flex; flex-wrap:wrap; gap:6px 18px; margin-top:6px; }
+.lg-item { display:inline-flex; align-items:center; gap:7px; font-size:12.5px; color:var(--text2); }
+.lg-item b { color:var(--text); }
+.sw { width:11px; height:11px; border-radius:3px; display:inline-block; flex:none; }
+
+/* 混淆矩阵 */
+.cm { display:grid; grid-template-columns:auto 1fr 1fr; gap:8px; }
+.cm-h { font-size:12px; color:var(--text2); text-align:center; padding:4px; }
+.cm-rowlab { font-size:12px; color:var(--text2); display:flex; align-items:center; justify-content:flex-end; padding-right:4px; }
+.cm-cell { background:var(--surface); background:color-mix(in srgb, var(--cell) 16%, var(--surface));
+  border:1px solid var(--cell); border-radius:10px; text-align:center; padding:18px 8px; }
+.cm-num { font-size:26px; font-weight:700; color:var(--text); }
+.cm-frac { font-size:12px; color:var(--text2); margin-top:2px; }
+.cm-desc { font-size:11px; margin-top:6px; color:var(--text2); }
+
+/* 表 */
+table { width:100%; border-collapse:collapse; font-size:12.5px; }
+th,td { padding:7px 9px; text-align:left; border-bottom:1px solid var(--gridline); }
+th { color:var(--text2); font-weight:600; position:sticky; top:0; background:var(--surface); }
+tr.ok td { background:rgba(12,163,12,.05); }
+tr.bad td { background:rgba(208,59,59,.07); }
+td.reason { color:var(--text2); }
+.notice { font-size:12.5px; color:var(--text2); background:var(--surface);
+  border:1px solid var(--border); border-radius:12px; padding:14px 18px; margin-top:16px; }
+.notice b { color:var(--text); }
+ul { margin:8px 0 0; padding-left:20px; }
+li { margin:3px 0; }
+.attribution { font-size:12.5px; color:var(--text2); background:var(--surface);
+  border:1px solid var(--border); border-radius:10px; padding:9px 14px; margin:20px 0 6px; }
+.attribution b { color:var(--text); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="attribution">作者：<b>Claude（AI 助手）</b> · 所做工作：编写测试脚本并生成报告</div>
+  <header>
+    <div>
+      <h1>枪头整齐度检测 · 数据分析报告</h1>
+      <div class="sub">基于 54 张测试图片（整齐 21 张 / 不整齐 33 张）的离线回归结果</div>
+    </div>
+    <button class="theme-btn" onclick="toggleTheme()">切换明暗</button>
+  </header>
+
+  <div class="kpis">
+    <div class="kpi"><div class="v">83.3%</div><div class="l">总体准确率（45/54）</div></div>
+    <div class="kpi pos"><div class="v">90.5%</div><div class="l">整齐类准确率（19/21）</div></div>
+    <div class="kpi neg"><div class="v">78.8%</div><div class="l">不整齐类准确率（26/33）</div></div>
+    <div class="kpi neg"><div class="v">9</div><div class="l">误判总数（漏检 7 + 误报 2）</div></div>
+  </div>
+
+  <h2>1 · 混淆矩阵</h2>
+  <p class="lead">行 = 真实状态，列 = 检测判定。绿色为判定正确，红/橙为误判。</p>
+  <div class="card">
+    <div class="cm">
+      <div></div><div class="cm-h">判定「整齐」</div><div class="cm-h">判定「不整齐」</div>
+      <div class="cm-rowlab">真实「整齐」</div>
+      <div class="cm-cell" style="--cell:var(--good)"><div class="cm-num">19</div><div class="cm-frac">90.5%</div><div class="cm-desc">正确 · TP</div></div>
+      <div class="cm-cell" style="--cell:var(--warning)"><div class="cm-num">2</div><div class="cm-frac">9.5%</div><div class="cm-desc">误报 · FN</div></div>
+      <div class="cm-rowlab">真实「不整齐」</div>
+      <div class="cm-cell" style="--cell:var(--critical)"><div class="cm-num">7</div><div class="cm-frac">21.2%</div><div class="cm-desc">漏检 · FP</div></div>
+      <div class="cm-cell" style="--cell:var(--good)"><div class="cm-num">26</div><div class="cm-frac">78.8%</div><div class="cm-desc">正确 · TN</div></div>
+    </div>
+  </div>
+
+  <h2>2 · 判定结果分布（饼图）</h2>
+  <p class="lead">中心数字为判定正确的样本占比。漏检不整齐是最主要的错误来源。</p>
+  <div class="card grid2">
+    <svg viewBox="0 0 280 280" role="img" aria-label="判定结果分布饼图"><path d="M 140.000 20.000 A 120.000 120.000 0 0 1 236.255 211.659 L 192.940 179.412 A 66.000 66.000 0 0 0 140.000 74.000 Z" fill="var(--aqua)" stroke="var(--surface-1)" stroke-width="2"/><text x="270.5" y="74.5" text-anchor="middle" dominant-baseline="middle" class="donut-label">19</text><path d="M 236.255 211.659 A 120.000 120.000 0 0 1 36.077 80.000 L 82.842 107.000 A 66.000 66.000 0 0 0 192.940 179.412 Z" fill="var(--blue)" stroke="var(--surface-1)" stroke-width="2"/><text x="59.8" y="262.0" text-anchor="middle" dominant-baseline="middle" class="donut-label">26</text><path d="M 36.077 80.000 A 120.000 120.000 0 0 1 112.326 23.235 L 124.779 75.779 A 66.000 66.000 0 0 0 82.842 107.000 Z" fill="var(--critical)" stroke="var(--surface-1)" stroke-width="2"/><text x="52.8" y="22.9" text-anchor="middle" dominant-baseline="middle" class="donut-label">7</text><path d="M 112.326 23.235 A 120.000 120.000 0 0 1 140.000 20.000 L 140.000 74.000 A 66.000 66.000 0 0 0 124.779 75.779 Z" fill="var(--warning)" stroke="var(--surface-1)" stroke-width="2"/><text x="123.1" y="-5.0" text-anchor="middle" dominant-baseline="middle" class="donut-label">2</text><text x="140" y="132" text-anchor="middle" class="donut-center-num">45/54</text><text x="140" y="158" text-anchor="middle" class="donut-center-sub">判定正确</text></svg>
+    <div class="legend" style="align-content:center;"><span class="lg-item"><span class="sw" style="background:var(--aqua)"></span>正确判整齐 <b>19</b> · 35.2%</span><span class="lg-item"><span class="sw" style="background:var(--blue)"></span>正确判不整齐 <b>26</b> · 48.1%</span><span class="lg-item"><span class="sw" style="background:var(--critical)"></span>漏检不整齐 <b>7</b> · 13.0%</span><span class="lg-item"><span class="sw" style="background:var(--warning)"></span>误报不整齐 <b>2</b> · 3.7%</span></div>
+  </div>
+
+  <h2>3 · 逐类准确率</h2>
+  <p class="lead">检测器对「整齐」很敏感（90.5%），但对「不整齐」漏检严重（仅 78.8%）。</p>
+  <div class="card"><svg viewBox="0 0 420 220" role="img" aria-label="逐类准确率柱状图"><line x1="0" y1="180" x2="420" y2="180" stroke="var(--baseline)" stroke-width="1.5"/><line x1="0" y1="180.0" x2="420" y2="180.0" stroke="var(--gridline)" stroke-width="1"/><text x="0" y="176.0" class="tick">0%</text><line x1="0" y1="140.0" x2="420" y2="140.0" stroke="var(--gridline)" stroke-width="1"/><text x="0" y="136.0" class="tick">25%</text><line x1="0" y1="100.0" x2="420" y2="100.0" stroke="var(--gridline)" stroke-width="1"/><text x="0" y="96.0" class="tick">50%</text><line x1="0" y1="60.0" x2="420" y2="60.0" stroke="var(--gridline)" stroke-width="1"/><text x="0" y="56.0" class="tick">75%</text><line x1="0" y1="20.0" x2="420" y2="20.0" stroke="var(--gridline)" stroke-width="1"/><text x="0" y="16.0" class="tick">100%</text><rect x="71.0" y="46.7" width="66" height="133.3" rx="4" fill="var(--blue)"/><text x="104.0" y="38.7" text-anchor="middle" class="bar-val">83.3%</text><text x="104.0" y="198.0" text-anchor="middle" class="bar-label">总体准确率</text><rect x="177.0" y="35.2" width="66" height="144.8" rx="4" fill="var(--aqua)"/><text x="210.0" y="27.2" text-anchor="middle" class="bar-val">90.5%</text><text x="210.0" y="198.0" text-anchor="middle" class="bar-label">整齐类</text><rect x="283.0" y="53.9" width="66" height="126.1" rx="4" fill="var(--orange)"/><text x="316.0" y="45.9" text-anchor="middle" class="bar-val">78.8%</text><text x="316.0" y="198.0" text-anchor="middle" class="bar-label">不整齐类</text></svg></div>
+
+  <h2>4 · 圆形检测数量分布</h2>
+  <p class="lead">整齐与不整齐图像的「圆形数」高度重叠，说明仅凭圆形数量/对齐无法区分不整齐 —— 这是漏检的根因。</p>
+  <div class="card"><svg viewBox="0 0 420 260" role="img" aria-label="圆形数量箱线图"><line x1="0" y1="205.6" x2="420" y2="205.6" stroke="var(--gridline)" stroke-width="1"/><text x="0" y="201.6" class="tick">60</text><line x1="0" y1="171.8" x2="420" y2="171.8" stroke="var(--gridline)" stroke-width="1"/><text x="0" y="167.8" class="tick">80</text><line x1="0" y1="138.1" x2="420" y2="138.1" stroke="var(--gridline)" stroke-width="1"/><text x="0" y="134.1" class="tick">100</text><line x1="0" y1="104.3" x2="420" y2="104.3" stroke="var(--gridline)" stroke-width="1"/><text x="0" y="100.3" class="tick">120</text><line x1="0" y1="70.6" x2="420" y2="70.6" stroke="var(--gridline)" stroke-width="1"/><text x="0" y="66.6" class="tick">140</text><line x1="0" y1="36.9" x2="420" y2="36.9" stroke="var(--gridline)" stroke-width="1"/><text x="0" y="32.9" class="tick">160</text><circle cx="122.2" cy="198.8" r="2.6" fill="var(--aqua)" opacity="0.55"/><circle cx="101.9" cy="170.1" r="2.6" fill="var(--aqua)" opacity="0.55"/><circle cx="110.1" cy="170.1" r="2.6" fill="var(--aqua)" opacity="0.55"/><circle cx="108.4" cy="170.1" r="2.6" fill="var(--aqua)" opacity="0.55"/><circle cx="125.4" cy="168.5" r="2.6" fill="var(--aqua)" opacity="0.55"/><circle cx="123.5" cy="168.5" r="2.6" fill="var(--aqua)" opacity="0.55"/><circle cx="130.6" cy="168.5" r="2.6" fill="var(--aqua)" opacity="0.55"/><circle cx="103.9" cy="166.8" r="2.6" fill="var(--aqua)" opacity="0.55"/><circle cx="115.0" cy="161.7" r="2.6" fill="var(--aqua)" opacity="0.55"/><circle cx="102.0" cy="158.3" r="2.6" fill="var(--aqua)" opacity="0.55"/><circle cx="108.3" cy="158.3" r="2.6" fill="var(--aqua)" opacity="0.55"/><circle cx="117.8" cy="158.3" r="2.6" fill="var(--aqua)" opacity="0.55"/><circle cx="101.9" cy="155.0" r="2.6" fill="var(--aqua)" opacity="0.55"/><circle cx="107.6" cy="155.0" r="2.6" fill="var(--aqua)" opacity="0.55"/><circle cx="122.6" cy="153.3" r="2.6" fill="var(--aqua)" opacity="0.55"/><circle cx="119.1" cy="148.2" r="2.6" fill="var(--aqua)" opacity="0.55"/><circle cx="108.3" cy="144.8" r="2.6" fill="var(--aqua)" opacity="0.55"/><circle cx="120.6" cy="144.8" r="2.6" fill="var(--aqua)" opacity="0.55"/><circle cx="127.8" cy="141.5" r="2.6" fill="var(--aqua)" opacity="0.55"/><circle cx="101.3" cy="131.3" r="2.6" fill="var(--aqua)" opacity="0.55"/><circle cx="127.7" cy="129.7" r="2.6" fill="var(--aqua)" opacity="0.55"/><rect x="94.6" y="148.2" width="46" height="20.2" fill="var(--aqua)" opacity="0.22" stroke="var(--aqua)" stroke-width="1.5" rx="3"/><line x1="94.6" y1="158.3" x2="140.6" y2="158.3" stroke="var(--aqua)" stroke-width="2.5"/><line x1="117.6" y1="198.8" x2="117.6" y2="168.5" stroke="var(--aqua)" stroke-width="1.2"/><line x1="117.6" y1="129.7" x2="117.6" y2="148.2" stroke="var(--aqua)" stroke-width="1.2"/><line x1="103.8" y1="198.8" x2="131.4" y2="198.8" stroke="var(--aqua)" stroke-width="1.5"/><line x1="103.8" y1="129.7" x2="131.4" y2="129.7" stroke="var(--aqua)" stroke-width="1.5"/><text x="117.6" y="140.2" text-anchor="middle" class="bar-label">中位 88</text><text x="117.6" y="246.0" text-anchor="middle" class="bar-label">整齐（n=21）</text><circle cx="287.1" cy="190.4" r="2.6" fill="var(--orange)" opacity="0.55"/><circle cx="308.9" cy="185.3" r="2.6" fill="var(--orange)" opacity="0.55"/><circle cx="290.6" cy="185.3" r="2.6" fill="var(--orange)" opacity="0.55"/><circle cx="301.2" cy="178.6" r="2.6" fill="var(--orange)" opacity="0.55"/><circle cx="308.1" cy="170.1" r="2.6" fill="var(--orange)" opacity="0.55"/><circle cx="312.1" cy="166.8" r="2.6" fill="var(--orange)" opacity="0.55"/><circle cx="300.8" cy="163.4" r="2.6" fill="var(--orange)" opacity="0.55"/><circle cx="302.3" cy="163.4" r="2.6" fill="var(--orange)" opacity="0.55"/><circle cx="286.5" cy="158.3" r="2.6" fill="var(--orange)" opacity="0.55"/><circle cx="300.2" cy="144.8" r="2.6" fill="var(--orange)" opacity="0.55"/><circle cx="298.2" cy="141.5" r="2.6" fill="var(--orange)" opacity="0.55"/><circle cx="314.1" cy="141.5" r="2.6" fill="var(--orange)" opacity="0.55"/><circle cx="304.0" cy="139.8" r="2.6" fill="var(--orange)" opacity="0.55"/><circle cx="310.9" cy="131.3" r="2.6" fill="var(--orange)" opacity="0.55"/><circle cx="300.2" cy="131.3" r="2.6" fill="var(--orange)" opacity="0.55"/><circle cx="291.7" cy="131.3" r="2.6" fill="var(--orange)" opacity="0.55"/><circle cx="314.0" cy="129.7" r="2.6" fill="var(--orange)" opacity="0.55"/><circle cx="313.0" cy="126.3" r="2.6" fill="var(--orange)" opacity="0.55"/><circle cx="298.3" cy="124.6" r="2.6" fill="var(--orange)" opacity="0.55"/><circle cx="289.0" cy="122.9" r="2.6" fill="var(--orange)" opacity="0.55"/><circle cx="302.8" cy="121.2" r="2.6" fill="var(--orange)" opacity="0.55"/><circle cx="302.3" cy="119.5" r="2.6" fill="var(--orange)" opacity="0.55"/><circle cx="311.4" cy="117.8" r="2.6" fill="var(--orange)" opacity="0.55"/><circle cx="305.6" cy="114.5" r="2.6" fill="var(--orange)" opacity="0.55"/><circle cx="302.6" cy="102.7" r="2.6" fill="var(--orange)" opacity="0.55"/><circle cx="304.9" cy="102.7" r="2.6" fill="var(--orange)" opacity="0.55"/><circle cx="298.3" cy="97.6" r="2.6" fill="var(--orange)" opacity="0.55"/><circle cx="287.5" cy="94.2" r="2.6" fill="var(--orange)" opacity="0.55"/><circle cx="287.9" cy="92.5" r="2.6" fill="var(--orange)" opacity="0.55"/><circle cx="317.0" cy="67.2" r="2.6" fill="var(--orange)" opacity="0.55"/><circle cx="313.6" cy="63.9" r="2.6" fill="var(--orange)" opacity="0.55"/><circle cx="295.6" cy="50.4" r="2.6" fill="var(--orange)" opacity="0.55"/><circle cx="315.3" cy="41.9" r="2.6" fill="var(--orange)" opacity="0.55"/><rect x="279.4" y="102.7" width="46" height="55.7" fill="var(--orange)" opacity="0.22" stroke="var(--orange)" stroke-width="1.5" rx="3"/><line x1="279.4" y1="129.7" x2="325.4" y2="129.7" stroke="var(--orange)" stroke-width="2.5"/><line x1="302.4" y1="190.4" x2="302.4" y2="158.3" stroke="var(--orange)" stroke-width="1.2"/><line x1="302.4" y1="41.9" x2="302.4" y2="102.7" stroke="var(--orange)" stroke-width="1.2"/><line x1="288.6" y1="190.4" x2="316.2" y2="190.4" stroke="var(--orange)" stroke-width="1.5"/><line x1="288.6" y1="41.9" x2="316.2" y2="41.9" stroke="var(--orange)" stroke-width="1.5"/><text x="302.4" y="94.7" text-anchor="middle" class="bar-label">中位 105</text><text x="302.4" y="246.0" text-anchor="middle" class="bar-label">不整齐（n=33）</text></svg></div>
+
+  <h2>5 · 逐图明细</h2>
+  <div class="card" style="padding:8px 16px 16px; max-height:460px; overflow:auto;">
+    <table>
+      <thead><tr><th>文件</th><th>期望</th><th>实际</th><th>结果</th><th>圆形数</th><th>散落数</th><th>说明</th></tr></thead>
+      <tbody><tr class="bad"><td>n1.jpg</td><td>不整齐</td><td>整齐</td><td>✗</td><td>85</td><td>0</td><td class="reason">整齐</td></tr><tr class="ok"><td>n2.jpg</td><td>不整齐</td><td>不整齐</td><td>✓</td><td>72</td><td>0</td><td class="reason">不整齐</td></tr><tr class="ok"><td>n3.jpg</td><td>不整齐</td><td>不整齐</td><td>✓</td><td>81</td><td>1</td><td class="reason">检测到 1 个散落/异形枪头</td></tr><tr class="ok"><td>n4.jpg</td><td>不整齐</td><td>不整齐</td><td>✓</td><td>76</td><td>1</td><td class="reason">检测到 1 个散落/异形枪头</td></tr><tr class="bad"><td>n5.jpg</td><td>不整齐</td><td>整齐</td><td>✗</td><td>72</td><td>0</td><td class="reason">整齐</td></tr><tr class="ok"><td>n6.jpg</td><td>不整齐</td><td>不整齐</td><td>✓</td><td>104</td><td>0</td><td class="reason">有 24 个枪头偏离槽中心线(偏差&gt;12px, 占比 23.1%)</td></tr><tr class="ok"><td>n7.jpg</td><td>不整齐</td><td>不整齐</td><td>✓</td><td>98</td><td>1</td><td class="reason">检测到 1 个散落/异形枪头</td></tr><tr class="ok"><td>n8.jpg</td><td>不整齐</td><td>不整齐</td><td>✓</td><td>110</td><td>1</td><td class="reason">检测到 1 个散落/异形枪头</td></tr><tr class="ok"><td>n9.jpg</td><td>不整齐</td><td>不整齐</td><td>✓</td><td>104</td><td>0</td><td class="reason">有 16 个枪头偏离槽中心线(偏差&gt;12px, 占比 15.4%)</td></tr><tr class="ok"><td>n10.jpg</td><td>不整齐</td><td>不整齐</td><td>✓</td><td>124</td><td>1</td><td class="reason">检测到 1 个散落/异形枪头; 有 20 个枪头偏离槽中心线(偏差&gt;12px, 占比 16.1%)</td></tr><tr class="bad"><td>n11.jpg</td><td>不整齐</td><td>整齐</td><td>✗</td><td>127</td><td>0</td><td class="reason">整齐</td></tr><tr class="ok"><td>n12.jpg</td><td>不整齐</td><td>不整齐</td><td>✓</td><td>108</td><td>1</td><td class="reason">检测到 1 个散落/异形枪头</td></tr><tr class="ok"><td>n14.jpg</td><td>不整齐</td><td>不整齐</td><td>✓</td><td>111</td><td>2</td><td class="reason">检测到 2 个散落/异形枪头; 有 17 个枪头偏离槽中心线(偏差&gt;12px, 占比 15.3%)</td></tr><tr class="bad"><td>n15.jpg</td><td>不整齐</td><td>整齐</td><td>✗</td><td>85</td><td>0</td><td class="reason">整齐</td></tr><tr class="ok"><td>n16.jpg</td><td>不整齐</td><td>不整齐</td><td>✓</td><td>109</td><td>1</td><td class="reason">检测到 1 个散落/异形枪头</td></tr><tr class="ok"><td>n17.jpg</td><td>不整齐</td><td>不整齐</td><td>✓</td><td>105</td><td>0</td><td class="reason">不整齐</td></tr><tr class="ok"><td>n18.jpg</td><td>不整齐</td><td>不整齐</td><td>✓</td><td>107</td><td>0</td><td class="reason">不整齐</td></tr><tr class="ok"><td>n19.jpg</td><td>不整齐</td><td>不整齐</td><td>✓</td><td>69</td><td>0</td><td class="reason">不整齐</td></tr><tr class="ok"><td>n20.jpg</td><td>不整齐</td><td>不整齐</td><td>✓</td><td>83</td><td>0</td><td class="reason">不整齐</td></tr><tr class="ok"><td>n21.jpg</td><td>不整齐</td><td>不整齐</td><td>✓</td><td>121</td><td>1</td><td class="reason">检测到 1 个散落/异形枪头</td></tr><tr class="bad"><td>n22.jpg</td><td>不整齐</td><td>整齐</td><td>✗</td><td>144</td><td>0</td><td class="reason">整齐</td></tr><tr class="ok"><td>n23.jpg</td><td>不整齐</td><td>不整齐</td><td>✓</td><td>121</td><td>1</td><td class="reason">检测到 1 个散落/异形枪头</td></tr><tr class="ok"><td>n24.jpg</td><td>不整齐</td><td>不整齐</td><td>✓</td><td>142</td><td>0</td><td class="reason">不整齐</td></tr><tr class="ok"><td>n25.jpg</td><td>不整齐</td><td>不整齐</td><td>✓</td><td>88</td><td>0</td><td class="reason">不整齐</td></tr><tr class="ok"><td>n26.jpg</td><td>不整齐</td><td>不整齐</td><td>✓</td><td>152</td><td>2</td><td class="reason">检测到 2 个散落/异形枪头</td></tr><tr class="ok"><td>n27.jpg</td><td>不整齐</td><td>不整齐</td><td>✓</td><td>98</td><td>0</td><td class="reason">有 19 个枪头偏离槽中心线(偏差&gt;12px, 占比 19.4%)</td></tr><tr class="ok"><td>n28.jpg</td><td>不整齐</td><td>不整齐</td><td>✓</td><td>157</td><td>0</td><td class="reason">有 25 个枪头偏离槽中心线(偏差&gt;12px, 占比 15.9%)</td></tr><tr class="ok"><td>n29.jpg</td><td>不整齐</td><td>不整齐</td><td>✓</td><td>112</td><td>0</td><td class="reason">有 23 个枪头偏离槽中心线(偏差&gt;12px, 占比 20.5%)</td></tr><tr class="ok"><td>n30.jpg</td><td>不整齐</td><td>不整齐</td><td>✓</td><td>104</td><td>0</td><td class="reason">不整齐</td></tr><tr class="ok"><td>n31.jpg</td><td>不整齐</td><td>不整齐</td><td>✓</td><td>126</td><td>0</td><td class="reason">不整齐</td></tr><tr class="bad"><td>n32.jpg</td><td>不整齐</td><td>整齐</td><td>✗</td><td>99</td><td>0</td><td class="reason">整齐</td></tr><tr class="ok"><td>n33.jpg</td><td>不整齐</td><td>不整齐</td><td>✓</td><td>114</td><td>1</td><td class="reason">检测到 1 个散落/异形枪头</td></tr><tr class="bad"><td>n34.jpg</td><td>不整齐</td><td>整齐</td><td>✗</td><td>96</td><td>0</td><td class="reason">整齐</td></tr><tr class="bad"><td>y1.jpg</td><td>整齐</td><td>不整齐</td><td>✗</td><td>83</td><td>1</td><td class="reason">检测到 1 个散落/异形枪头</td></tr><tr class="ok"><td>y2.jpg</td><td>整齐</td><td>整齐</td><td>✓</td><td>64</td><td>0</td><td class="reason">整齐</td></tr><tr class="ok"><td>y3.jpg</td><td>整齐</td><td>整齐</td><td>✓</td><td>82</td><td>0</td><td class="reason">整齐</td></tr><tr class="ok"><td>y4.jpg</td><td>整齐</td><td>整齐</td><td>✓</td><td>86</td><td>0</td><td class="reason">整齐</td></tr><tr class="ok"><td>y5.jpg</td><td>整齐</td><td>整齐</td><td>✓</td><td>88</td><td>0</td><td class="reason">整齐</td></tr><tr class="ok"><td>y6.jpg</td><td>整齐</td><td>整齐</td><td>✓</td><td>105</td><td>0</td><td class="reason">整齐</td></tr><tr class="bad"><td>y7.jpg</td><td>整齐</td><td>不整齐</td><td>✗</td><td>81</td><td>0</td><td class="reason">有 17 个枪头偏离槽中心线(偏差&gt;12px, 占比 21.0%)</td></tr><tr class="ok"><td>y8.jpg</td><td>整齐</td><td>整齐</td><td>✓</td><td>96</td><td>0</td><td class="reason">整齐</td></tr><tr class="ok"><td>y9.jpg</td><td>整齐</td><td>整齐</td><td>✓</td><td>82</td><td>0</td><td class="reason">整齐</td></tr><tr class="ok"><td>y10.jpg</td><td>整齐</td><td>整齐</td><td>✓</td><td>104</td><td>0</td><td class="reason">整齐</td></tr><tr class="ok"><td>y11.jpg</td><td>整齐</td><td>整齐</td><td>✓</td><td>81</td><td>0</td><td class="reason">整齐</td></tr><tr class="ok"><td>y12.jpg</td><td>整齐</td><td>整齐</td><td>✓</td><td>96</td><td>0</td><td class="reason">整齐</td></tr><tr class="ok"><td>y13.jpg</td><td>整齐</td><td>整齐</td><td>✓</td><td>81</td><td>0</td><td class="reason">整齐</td></tr><tr class="ok"><td>y14.jpg</td><td>整齐</td><td>整齐</td><td>✓</td><td>91</td><td>0</td><td class="reason">整齐</td></tr><tr class="ok"><td>y15.jpg</td><td>整齐</td><td>整齐</td><td>✓</td><td>90</td><td>0</td><td class="reason">整齐</td></tr><tr class="ok"><td>y16.jpg</td><td>整齐</td><td>整齐</td><td>✓</td><td>88</td><td>0</td><td class="reason">整齐</td></tr><tr class="ok"><td>y17.jpg</td><td>整齐</td><td>整齐</td><td>✓</td><td>88</td><td>0</td><td class="reason">整齐</td></tr><tr class="ok"><td>y18.jpg</td><td>整齐</td><td>整齐</td><td>✓</td><td>82</td><td>0</td><td class="reason">整齐</td></tr><tr class="ok"><td>y19.jpg</td><td>整齐</td><td>整齐</td><td>✓</td><td>94</td><td>0</td><td class="reason">整齐</td></tr><tr class="ok"><td>y20.jpg</td><td>整齐</td><td>整齐</td><td>✓</td><td>98</td><td>0</td><td class="reason">整齐</td></tr><tr class="ok"><td>y21.jpg</td><td>整齐</td><td>整齐</td><td>✓</td><td>90</td><td>0</td><td class="reason">整齐</td></tr></tbody>
+    </table>
+  </div>
+
+  <div class="notice">
+    <b>结论：</b>
+    <ul>
+      <li>总体准确率 <b>83.3%</b>，整齐类召回 <b>90.5%</b>，但不整齐类召回仅 <b>78.8%</b>。</li>
+      <li>9 个误判中，<b>7 个是「漏检不整齐」</b>（把不整齐误判为整齐，占比 77.8%）—— 若用于自动控制，意味着系统会放过不整齐的枪头直接进入下一步，是最需要改进的方向。</li>
+      <li>仅 2 个「误报不整齐」（整齐被判为不整齐），后果只是多震荡一轮，代价较小。</li>
+      <li>漏检样本的检测结果均为「圆形齐整、无散落」，说明现有圆检测无法刻画这类不整齐形态（如枪头倾斜/错位但俯视仍为圆），建议补充相邻间距均匀性检查或角度一致性特征。</li>
+    </ul>
+  </div>
+</div>
+<script>
+function toggleTheme() {
+  const r = document.documentElement;
+  r.setAttribute('data-theme', r.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
+}
+</script>
+</body>
+</html>
