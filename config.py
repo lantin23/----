@@ -54,6 +54,17 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "show_preview": True,     # 是否显示检测预览窗口
         "led_enabled": False,     # 是否启用 LED 照明控制（无 LED 硬件时设为 false）
     },
+    # ---- 相机画质参数（曝光/亮度等，None=不修改相机默认） ----
+    # 用 camera_tune.py 实时调好后按 w 保存到这里
+    "camera": {
+        "auto_exposure": None,   # 0.75=自动曝光, 0.25=手动曝光
+        "exposure": None,        # 手动曝光值(多数相机 -13~-1, 越小越暗)
+        "brightness": None,      # 亮度(多数 0~255)
+        "contrast": None,        # 对比度
+        "gain": None,            # 增益
+        "saturation": None,      # 饱和度
+        "sharpness": None,       # 清晰度
+    },
     # ---- 检测阈值（对应 PipetteDetector 的属性名） ----
     "detector": {
         "detection_mode": "circle",        # circle / contour

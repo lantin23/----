@@ -29,6 +29,15 @@
     "show_preview": true,
     "led_enabled": false
   },
+  "camera": {
+    "auto_exposure": null,
+    "exposure": null,
+    "brightness": null,
+    "contrast": null,
+    "gain": null,
+    "saturation": null,
+    "sharpness": null
+  },
   "detector": {
     "detection_mode": "circle",
     "slot_direction": "auto",

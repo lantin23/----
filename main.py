@@ -10,7 +10,7 @@ import cv2
 
 from pipette_detector import PipetteDetector
 from hardware_control import SerialController, list_ports
-from auto_control import AutoControlLoop, list_cameras, resolve_backend
+from auto_control import AutoControlLoop, list_cameras, resolve_backend, apply_camera_settings
 from config import load_config, setup_logging, apply_detector_config, save_config
 
 
@@ -124,6 +124,7 @@ def process_auto_mode(detector: PipetteDetector, cfg=None):
         frame_height=auto_cfg.get("frame_height", 720),
         show_preview=auto_cfg.get("show_preview", True),
         led_enabled=auto_cfg.get("led_enabled", False),
+        camera_settings=cfg.get("camera"),
     )
     neat = loop.run()
 
@@ -162,6 +163,10 @@ def process_camera_preview(detector: PipetteDetector, cfg=None):
     if not cap.isOpened():
         print("  [相机] 打开失败")
         return
+    auto_cfg = cfg.get("auto_control", {})
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, auto_cfg.get("frame_width", 1280))
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, auto_cfg.get("frame_height", 720))
+    apply_camera_settings(cap, cfg.get("camera"))
     print(f"  正在预览设备号 {idx}，按 ESC 退出...")
     try:
         # MSMF 部分相机需预热/偶发读帧失败，允许连续失败若干次才判定失败
@@ -170,12 +175,12 @@ def process_camera_preview(detector: PipetteDetector, cfg=None):
             ret, frame = cap.read()
             if ret and frame is not None:
                 fail_count = 0
-                detector.detect(frame)
+                detector.detect(frame)          
                 display = detector.draw(frame)
                 cv2.imshow("相机预览", display)
                 if cv2.waitKey(1) & 0xFF == 27:
                     break
-            else:
+            else:n
                 fail_count += 1
                 time.sleep(0.2)
                 if fail_count >= 5:

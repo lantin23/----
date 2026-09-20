@@ -22,8 +22,8 @@ def main():
     out_dir = r"C:\Users\23870\Pictures\result"
 
     # 分类整理
-    tidy_files = ["y5.jpg", "y6.jpg", "y7.jpg", "y8.jpg", "y9.jpg", "y10.jpg", "y11.jpg", "y12.jpg","y14.jpg", "y15.jpg", "y16.jpg", "y17.jpg"]
-    messy_files = ["n6.jpg", "n7.jpg", "n8.jpg", "n9.jpg", "n10.jpg", "n11.jpg", "n12.jpg","n14.jpg"]
+    tidy_files = ["y1.jpg", "y2.jpg", "y3.jpg", "y4.jpg", "y5.jpg", "y6.jpg", "y7.jpg", "y8.jpg", "y9.jpg", "y10.jpg", "y11.jpg", "y12.jpg","y14.jpg", "y15.jpg", "y16.jpg", "y17.jpg", "y18.jpg", "y19.jpg", "y20.jpg", "y21.jpg"]
+    messy_files = ["n1.jpg", "n2.jpg", "n3.jpg", "n4.jpg", "n5.jpg", "n6.jpg", "n7.jpg", "n8.jpg", "n9.jpg", "n10.jpg", "n11.jpg", "n12.jpg","n14.jpg", "n15.jpg", "n16.jpg", "n17.jpg", "n18.jpg", "n19.jpg", "n20.jpg", "n21.jpg", "n22.jpg", "n23.jpg", "n24.jpg", "n25.jpg", "n26.jpg", "n27.jpg", "n28.jpg", "n29.jpg", "n30.jpg", "n31.jpg", "n32.jpg", "n33.jpg", "n34.jpg"]
 
     detector = PipetteDetector()
 

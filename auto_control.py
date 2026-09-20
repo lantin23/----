@@ -40,6 +40,31 @@ def resolve_backend(name: str = "msmf"):
     return getattr(cv2, "CAP_MSMF", cv2.CAP_ANY)
 
 
+# 相机可调参数 -> OpenCV 属性名映射（供 apply_camera_settings 使用）
+_CAMERA_PROP_MAP = {
+    "exposure": cv2.CAP_PROP_EXPOSURE,
+    "brightness": cv2.CAP_PROP_BRIGHTNESS,
+    "contrast": cv2.CAP_PROP_CONTRAST,
+    "gain": cv2.CAP_PROP_GAIN,
+    "saturation": cv2.CAP_PROP_SATURATION,
+    "sharpness": cv2.CAP_PROP_SHARPNESS,
+}
+
+
+def apply_camera_settings(cap, settings: Optional[dict] = None) -> None:
+    """把配置里的相机参数应用到已打开的摄像头（无配置则不动）。
+
+    自动曝光需先于手动曝光设置；值为 None 的项跳过（保持相机默认）。
+    """
+    if not settings:
+        return
+    if settings.get("auto_exposure") is not None:
+        cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, float(settings["auto_exposure"]))
+    for name, prop in _CAMERA_PROP_MAP.items():
+        if settings.get(name) is not None:
+            cap.set(prop, float(settings[name]))
+
+
 class AutoControlLoop:
     """自动震荡控制循环（状态机）。"""
 
@@ -57,6 +82,7 @@ class AutoControlLoop:
         frame_height: int = 720,
         show_preview: bool = True,
         led_enabled: bool = False,   # 是否启用 LED 照明控制
+        camera_settings: Optional[dict] = None,  # 曝光/亮度等相机参数
         confirm_callback: Optional[Callable[[], None]] = None,
         on_round_result: Optional[Callable[[int, bool, object], None]] = None,
     ):
@@ -72,6 +98,7 @@ class AutoControlLoop:
         self.frame_height = frame_height
         self.show_preview = show_preview
         self.led_enabled = led_enabled
+        self.camera_settings = camera_settings or {}
 
         # 手动整理后的确认回调；默认用 input() 等待回车
         self.confirm_callback = confirm_callback
@@ -99,6 +126,7 @@ class AutoControlLoop:
                 continue
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.frame_width)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.frame_height)
+            apply_camera_settings(cap, self.camera_settings)
             # 部分相机需预热，重试读取若干次，直到拿到真实画面
             for _ in range(5):
                 ret, frame = cap.read()

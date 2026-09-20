@@ -40,8 +40,9 @@ class DetectionResult:
     # 每个点到最近槽线的偏差(像素)
     slot_deviations: List[float] = field(default_factory=list)
     # 散落枪头（非圆形/异常形状的检测结果）
-    fallen_tips: List[Tuple[float, float, float, float]] = field(default_factory=list)
-    # (cx, cy, w, h)
+    # 黑容器方法返回 (cx, cy, w, h, angle)：最小旋转矩形的中心、尺寸与旋转角，
+    # 用于精确定位斜躺的枪头；浅容器方法仍返回 (cx, cy, w, h) 轴对齐框。
+    fallen_tips: List[Tuple[float, ...]] = field(default_factory=list)
 
     @property
     def reason_text(self) -> str:
@@ -672,8 +673,8 @@ class PipetteDetector:
         h, w = frame.shape[:2]
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-        # 黑容器（半透明白色枪头 + 黑色背景）：改用亮色细长连通域检测，
-        # 原轮廓/对角线方法会把整齐枪头排成的行/列误判为散落枪头。
+        # 黑容器（半透明白色枪头 + 黑色背景）：亮色细长连通域检测。
+        # 整齐的枪头从上往下是圆环，散落枪头是细长亮条，二者形状不同。
         if float(gray.mean()) < 105:
             self._detect_fallen_tips_black(frame, gray)
             return
@@ -947,15 +948,13 @@ class PipetteDetector:
         黑容器散落枪头检测（半透明白色枪头 + 黑色背景）。
 
         直立的枪头从上往下看是圆环形（已由圆形检测捕获）；掉落的枪头横/斜
-        躺在黑色容器上，呈现为一条细长的亮色连通域。这里用 OTSU 阈值取亮区，
-        再做连通域分析，筛选出"细长且不含成排圆形"的亮斑作为散落枪头。
+        躺在黑色容器上，呈现为一条细长、实心、明亮的连通域。这里用 OTSU 阈值
+        取亮区，再做连通域分析，筛选出"细长、明亮、且不含成排圆形"的亮斑。
 
-        关键过滤（对齐真实散落枪头签名：约 117x496px、长宽比约 4.2、亮度约 157）：
-        - 长宽比 3.5~8（排除整齐枪头排成的短行/列）
-        - 短边 >= 60px（排除槽缝/反光细条）
-        - 不含 >= 3 个已检圆心（排除整齐枪头排成的行/列）
-        - 不贴图像边框（排除容器反光墙）
-        - 平均亮度 >= 145（半透明白色枪头明显亮于灰影）
+        关键：散落枪头是实心亮条（fill 较高），而整齐枪头排成行/列或槽缝反光
+        是稀疏亮条（fill 低），用 fill >= 0.50 区分。注意不要用"长轴必须偏离
+        槽方向"过滤——散落枪头横在槽上时长轴可与槽方向接近平行（如近竖直斜躺），
+        这种过滤会把真实散落枪头误杀。
         """
         h, w = gray.shape[:2]
         blur = cv2.GaussianBlur(gray, (5, 5), 0)
@@ -965,8 +964,6 @@ class PipetteDetector:
 
         num, labels, stats, _ = cv2.connectedComponentsWithStats(mask, 8)
         margin = max(80, int(min(h, w) * 0.06))
-        slot_direction = self._determine_slot_direction()
-        slot_angle = 90.0 if slot_direction == "vertical" else 0.0
 
         fallen: List[Tuple[float, float, float, float]] = []
         for i in range(1, num):
@@ -977,7 +974,7 @@ class PipetteDetector:
             if aspect < 3.5 or aspect > 12.0:
                 continue
             fill = area / (bw * bh)
-            if fill < 0.30 or fill > 0.90:
+            if fill < 0.50 or fill > 0.90:
                 continue
             if min(bw, bh) < 22:
                 continue
@@ -993,22 +990,16 @@ class PipetteDetector:
             sub = labels[y:y + bh, x:x + bw] == i
             if seg[sub].size == 0 or float(seg[sub].mean()) < 145:
                 continue
-            # 散落枪头横跨在槽上，长轴应偏离槽方向；与槽方向平行的细长亮条
-            # 是整齐枪头排成的行/列或槽缝，必须排除。
+            # 精确定位：用最小旋转矩形贴着枪头长轴。轴对齐框对斜躺枪头会
+            # 偏大、中心偏移；旋转框的 center/size/angle 才是枪头真实位姿。
             ys, xs = np.where(sub)
+            xs = xs + x
+            ys = ys + y
             if len(xs) < 20:
                 continue
-            pts = np.stack([xs, ys], axis=1).astype(np.float64)
-            centered = pts - pts.mean(axis=0)
-            cov = np.cov(centered.T)
-            eigvals, eigvecs = np.linalg.eigh(cov)
-            long_axis = eigvecs[:, int(np.argmax(eigvals))]
-            theta = float(np.degrees(np.arctan2(long_axis[1], long_axis[0]))) % 180.0
-            delta = abs(theta - slot_angle)
-            delta = min(delta, 180.0 - delta)
-            if delta < 30.0:
-                continue
-            fallen.append((x + bw / 2, y + bh / 2, bw, bh))
+            rect = cv2.minAreaRect(np.stack([xs, ys], axis=1).astype(np.float32))
+            (rcx, rcy), (rw, rh), rangle = rect
+            fallen.append((rcx, rcy, rw, rh, rangle))
 
         self._result.fallen_tips = fallen
         self._last_fallen_all = list(fallen)
@@ -1566,14 +1557,26 @@ class PipetteDetector:
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 0, 0), 1)
 
         # 绘制散落枪头（用亮黄色矩形框标出）
-        for idx, (cx, cy, w, h) in enumerate(self._result.fallen_tips, 1):
-            x1 = int(cx - w / 2)
-            y1 = int(cy - h / 2)
-            x2 = int(cx + w / 2)
-            y2 = int(cy + h / 2)
-            cv2.rectangle(canvas, (x1, y1), (x2, y2), (0, 255, 255), 3)
-            cv2.putText(canvas, f"F{idx}", (x1, max(y1 - 5, 15)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+        for idx, tip in enumerate(self._result.fallen_tips, 1):
+            if len(tip) >= 5:
+                # 最小旋转矩形：斜框贴着枪头长轴
+                cx, cy, w, h, ang = tip[0], tip[1], tip[2], tip[3], tip[4]
+                box = cv2.boxPoints(((cx, cy), (w, h), ang))
+                box = np.round(box).astype(np.int32)
+                cv2.polylines(canvas, [box], True, (0, 255, 255), 3)
+                lx = int(box[:, 0].min())
+                ly = int(box[:, 1].min())
+                cv2.putText(canvas, f"F{idx}", (lx, max(ly - 5, 15)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+            else:
+                cx, cy, w, h = tip
+                x1 = int(cx - w / 2)
+                y1 = int(cy - h / 2)
+                x2 = int(cx + w / 2)
+                y2 = int(cy + h / 2)
+                cv2.rectangle(canvas, (x1, y1), (x2, y2), (0, 255, 255), 3)
+                cv2.putText(canvas, f"F{idx}", (x1, max(y1 - 5, 15)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
 
         # 结果横幅
         result_text = "TIDY" if self._result.is_neat else "MESSY"
